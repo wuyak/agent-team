@@ -50,18 +50,14 @@ def normalize_thread_id(value: str) -> str:
         parsed = uuid.UUID(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"invalid Codex thread id: {value!r}")
-    normalized = str(parsed)
-    if value.lower() != normalized:
-        raise argparse.ArgumentTypeError(
-            f"Codex thread id must use canonical UUID form: {normalized}"
-        )
-    return normalized
+    return str(parsed)
 
 
 class AppServerClient:
     def __init__(self, codex: str, timeout: float) -> None:
         self.timeout = timeout
         self.stderr_tail: deque[str] = deque(maxlen=20)
+        self._closed = False
         try:
             self.process = subprocess.Popen(
                 [codex, "app-server", "--stdio"],
@@ -147,6 +143,7 @@ class AppServerClient:
                 fail(
                     f"Codex app-server rejected {method}: "
                     f"{json.dumps(message['error'], ensure_ascii=False, separators=(',', ':'))}"
+                    f"{self._stderr_context()}"
                 )
             if "result" not in message:
                 fail(f"Codex app-server reply to {method} has no result")
@@ -170,23 +167,46 @@ class AppServerClient:
         return result
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         process = getattr(self, "process", None)
-        if process is None or process.poll() is not None:
+        if process is None:
             return
         if process.stdin is not None:
             try:
                 process.stdin.close()
-            except OSError:
+            except (OSError, ValueError):
                 pass
-        try:
-            process.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            process.terminate()
+        if process.poll() is None:
             try:
                 process.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=1.0)
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    try:
+                        process.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+        for thread in (
+            getattr(self, "stdout_thread", None),
+            getattr(self, "stderr_thread", None),
+        ):
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=1.0)
+        for stream in (
+            getattr(process, "stdin", None),
+            getattr(process, "stdout", None),
+            getattr(process, "stderr", None),
+        ):
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
     def __enter__(self) -> "AppServerClient":
         return self
@@ -257,6 +277,17 @@ def emit(operation: str, result: Any, *, codex: str) -> None:
     )
 
 
+def validate_thread_metadata(result: Any, requested_thread_id: str) -> None:
+    if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
+        fail("Codex app-server thread/read result has no thread metadata")
+    returned_thread_id = result["thread"].get("id")
+    if returned_thread_id != requested_thread_id:
+        fail(
+            "Codex app-server returned metadata for unexpected thread: "
+            f"{returned_thread_id!r} (requested {requested_thread_id!r})"
+        )
+
+
 def main() -> int:
     args = build_parser().parse_args()
     codex = resolve_codex(args.codex)
@@ -271,6 +302,7 @@ def main() -> int:
                 "thread/read",
                 {"threadId": args.thread_id, "includeTurns": False},
             )
+            validate_thread_metadata(result, args.thread_id)
             emit("thread/read", result, codex=codex)
             return 0
         params: dict[str, Any] = {

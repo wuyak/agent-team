@@ -46,6 +46,12 @@ classify_wait_outcome = record_common.classify_wait_outcome
 payload_dict = record_common.payload_dict
 ulid_time_key = record_common.ulid_time_key
 parse_timestamp = record_common.parse_timestamp
+empty_coordination_metrics = record_common.empty_coordination_metrics
+lifecycle_incomplete_messages = record_common.lifecycle_incomplete_messages
+delivery_failure_messages = record_common.delivery_failure_messages
+fork_request_observation_mismatch_messages = record_common.fork_request_observation_mismatch_messages
+_parent_message_phase = record_common.parent_message_phase
+elapsed_ms = record_common.elapsed_ms
 FORK_REQUEST_OBSERVABILITY = {
     "observed",
     "omitted",
@@ -59,7 +65,7 @@ TERMINAL_STATUS = {
     "turn_failed": "errored",
     "turn_aborted": "interrupted",
 }
-TERMINAL_AGENT_STATUSES = {"completed", "errored", "interrupted"}
+TERMINAL_AGENT_STATUSES = record_common.TERMINAL_AGENT_STATUSES
 UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -91,17 +97,6 @@ def sanitize_requested_fork_turns(
     return record_common.sanitize_requested_fork_turns(
         tool_input, missing_observability="omitted"
     )
-
-
-def elapsed_ms(start: str | None, end: str | None) -> int | None:
-    if not start or not end:
-        return None
-    try:
-        start_time = datetime.fromisoformat(start.replace("Z", "+00:00"))
-        end_time = datetime.fromisoformat(end.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return max(0, round((end_time - start_time).total_seconds() * 1000))
 
 
 def expected_role_runtimes(agent: dict[str, Any]) -> tuple[tuple[str, str], ...] | None:
@@ -423,18 +418,6 @@ def reconcile_event_key_index_locked(
     marker = event_key_index_marker(dirs, parent_thread_id, turn_id)
     if not marker.is_file():
         atomic_json(marker, {"initialized_at": utc_now()})
-
-
-def initialize_event_key_index_locked(
-    journal: Path,
-    dirs: dict[str, Path],
-    parent_thread_id: str,
-    turn_id: str,
-) -> None:
-    """Backward-compatible name for the offset-based reconciliation pass."""
-    reconcile_event_key_index_locked(
-        journal, dirs, parent_thread_id, turn_id
-    )
 
 
 def append_journal_events_locked(
@@ -1640,49 +1623,6 @@ def normalize_operation(tool_name: str, tool_input: dict[str, Any]) -> str | Non
     return None
 
 
-def empty_coordination_metrics(
-    *, observability: str = "unknown", source: str = "not_observed"
-) -> dict[str, Any]:
-    return {
-        "version": COORDINATION_CLASSIFIER_VERSION,
-        "observability": observability,
-        "source": source,
-        "operation_counts": {operation: 0 for operation in COORDINATION_OPERATIONS},
-        "operation_observability": {
-            operation: "not_observed" for operation in COORDINATION_OPERATIONS
-        },
-        "wait_outcomes": {outcome: 0 for outcome in WAIT_OUTCOMES},
-        "parent_message_phase_counts": {
-            "commentary": 0,
-            "final_answer": 0,
-            "unknown": 0,
-        },
-        "parent_message_observability": "not_observed",
-        "child_handback_counts": {
-            "message": 0,
-            "final_answer": 0,
-            "unknown": 0,
-        },
-        "child_handback_observability": "not_observed",
-        "requested_wait_ms": None,
-        "observed_wait_ms": None,
-        "requested_wait_ms_observability": "not_observed",
-        "observed_wait_ms_observability": "not_observed",
-        "max_consecutive_timeout_without_agent_update": 0,
-        "timeout_without_agent_update_count": 0,
-        # No native event currently proves these transitions.  In particular,
-        # a completed PostToolUse is not an applied steering acknowledgement.
-        "commitment": "not_observed",
-        "ready_transition": "not_observed",
-        "steering_applied": "not_observed",
-        "native_live_status": "not_observed",
-    }
-
-
-def _duration_ms(value: Any) -> int | None:
-    return record_common.duration_ms(value, floor_before_bound=True)
-
-
 def _wait_duration(value: Any, keys: tuple[str, ...]) -> int | None:
     return record_common.duration_from(value, keys, floor_before_bound=True)
 
@@ -2169,24 +2109,6 @@ def parent_cursor_transcript(
 def _coordination_call_id(payload: dict[str, Any], line_offset: int) -> str:
     call_id = payload.get("call_id")
     return call_id if isinstance(call_id, str) and call_id else f"offset:{line_offset}"
-
-
-def _parent_message_phase(
-    payload: dict[str, Any], turn_id: str | None
-) -> str | None:
-    """Return a phase only for an identity-bound parent assistant message."""
-    if payload.get("type") != "message" or payload.get("role") != "assistant":
-        return None
-    metadata = payload.get("internal_chat_message_metadata_passthrough")
-    metadata_turn_id = (
-        metadata.get("turn_id")
-        if isinstance(metadata, dict) and isinstance(metadata.get("turn_id"), str)
-        else None
-    )
-    if not isinstance(metadata_turn_id, str) or turn_id is None or metadata_turn_id != turn_id:
-        return None
-    phase = payload.get("phase")
-    return phase if phase in {"commentary", "final_answer"} else "unknown"
 
 
 def consume_parent_coordination_event(
@@ -3398,26 +3320,6 @@ def binding_uncertainty_messages(
     return labels
 
 
-def lifecycle_incomplete_messages(agents: list[dict[str, Any]]) -> list[str]:
-    return [
-        f"{agent.get('agent_id') or 'unknown'} has nonterminal status "
-        f"{agent.get('status') or 'unknown'} without terminal or reclaim evidence"
-        for agent in agents
-        if agent.get("status") not in TERMINAL_AGENT_STATUSES
-    ]
-
-
-def delivery_failure_messages(agents: list[dict[str, Any]]) -> list[str]:
-    """A completed child did work, but its result was not delivered."""
-    return [
-        f"{agent.get('agent_id') or 'unknown'} completed after tool activity without a final message"
-        for agent in agents
-        if agent.get("status") == "completed"
-        and int(agent.get("tool_calls") or 0) > 0
-        and int(agent.get("final_message_chars") or 0) == 0
-    ]
-
-
 def authority_contract_mismatch_messages(
     agents: list[dict[str, Any]],
 ) -> list[str]:
@@ -3437,40 +3339,6 @@ def authority_contract_mismatch_messages(
                 f"{agent.get('agent_id') or 'unknown'} role sandbox expected "
                 f"{configured}, observed effective {observed}"
             )
-    return messages
-
-
-def fork_request_observation_mismatch_messages(
-    attempts: list[dict[str, Any]], agents: list[dict[str, Any]]
-) -> list[str]:
-    """Return only contradictions proven by both request and child metadata."""
-    agents_by_id = {agent.get("agent_id"): agent for agent in agents}
-    messages: list[str] = []
-    for attempt in attempts:
-        requested = attempt.get("requested_fork_turns")
-        if not (
-            requested in {"none", "all"}
-            if isinstance(requested, str)
-            else False
-        ) and not (
-            isinstance(requested, int) and not isinstance(requested, bool) and requested > 0
-        ):
-            continue
-        agent = agents_by_id.get(attempt.get("agent_id"))
-        if not isinstance(agent, dict):
-            continue
-        observed = agent.get("fork_observed")
-        if observed is None:
-            continue
-        mismatch = requested == "none" and observed is True
-        mismatch = mismatch or requested != "none" and observed is False
-        if not mismatch:
-            continue
-        actual = "forked" if observed else "not-forked"
-        messages.append(
-            f"{agent.get('agent_id') or 'unknown'} requested fork_turns={requested} "
-            f"but child metadata proves {actual}"
-        )
     return messages
 
 

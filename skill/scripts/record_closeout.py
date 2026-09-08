@@ -54,6 +54,11 @@ classify_wait_outcome = record_common.classify_wait_outcome
 payload_dict = record_common.payload_dict
 ulid_time_key = record_common.ulid_time_key
 parse_timestamp = record_common.parse_timestamp
+lifecycle_incomplete_messages = record_common.lifecycle_incomplete_messages
+delivery_failure_messages = record_common.delivery_failure_messages
+fork_request_observation_mismatch_messages = record_common.fork_request_observation_mismatch_messages
+parent_message_phase = record_common.parent_message_phase
+elapsed_ms = record_common.elapsed_ms
 FORK_REQUEST_OBSERVABILITY = {
     "observed",
     "omitted",
@@ -61,6 +66,14 @@ FORK_REQUEST_OBSERVABILITY = {
     "not_observed",
     "legacy",
 }
+
+
+def empty_coordination_metrics(
+    *, observability: str = "legacy", source: str = "transcript-replay"
+) -> dict[str, Any]:
+    return record_common.empty_coordination_metrics(
+        observability=observability, source=source, evidence="legacy"
+    )
 
 
 def sanitize_requested_fork_turns(
@@ -105,65 +118,8 @@ def classify_terminal_error(value: Any, terminal_type: str | None = None) -> str
     return classify_tool_error(value) or "unknown"
 
 
-def empty_coordination_metrics(
-    *, observability: str = "legacy", source: str = "transcript-replay"
-) -> dict[str, Any]:
-    return {
-        "version": COORDINATION_CLASSIFIER_VERSION,
-        "observability": observability,
-        "source": source,
-        "operation_counts": {operation: 0 for operation in COORDINATION_OPERATIONS},
-        "wait_outcomes": {outcome: 0 for outcome in WAIT_OUTCOMES},
-        "parent_message_phase_counts": {
-            "commentary": 0,
-            "final_answer": 0,
-            "unknown": 0,
-        },
-        "parent_message_observability": "legacy",
-        "child_handback_counts": {
-            "message": 0,
-            "final_answer": 0,
-            "unknown": 0,
-        },
-        "child_handback_observability": "legacy",
-        "requested_wait_ms": None,
-        "observed_wait_ms": None,
-        "requested_wait_ms_observability": "not_observed",
-        "observed_wait_ms_observability": "not_observed",
-        "max_consecutive_timeout_without_agent_update": 0,
-        "timeout_without_agent_update_count": 0,
-        "commitment": "not_observed",
-        "ready_transition": "not_observed",
-        "steering_applied": "not_observed",
-        "native_live_status": "not_observed",
-        "operation_observability": {
-            operation: "legacy" for operation in COORDINATION_OPERATIONS
-        },
-    }
-
-
-def _duration_ms_value(value: Any) -> int | None:
-    return record_common.duration_ms(value)
-
-
 def _duration_from(value: Any, keys: tuple[str, ...]) -> int | None:
     return record_common.duration_from(value, keys)
-
-
-def parent_message_phase(payload: dict[str, Any], turn_id: str | None) -> str | None:
-    """Return a phase only for an identity-bound parent assistant message."""
-    if payload.get("type") != "message" or payload.get("role") != "assistant":
-        return None
-    metadata = payload.get("internal_chat_message_metadata_passthrough")
-    metadata_turn_id = (
-        metadata.get("turn_id")
-        if isinstance(metadata, dict) and isinstance(metadata.get("turn_id"), str)
-        else None
-    )
-    if not isinstance(metadata_turn_id, str) or turn_id is None or metadata_turn_id != turn_id:
-        return None
-    phase = payload.get("phase")
-    return phase if phase in {"commentary", "final_answer"} else "unknown"
 
 
 def parse_parent_coordination(
@@ -280,7 +236,7 @@ def parse_parent_coordination(
     return metrics
 
 
-TERMINAL_AGENT_STATUSES = {"completed", "errored", "interrupted"}
+TERMINAL_AGENT_STATUSES = record_common.TERMINAL_AGENT_STATUSES
 
 
 def bounded(value: str, field: str, limit: int) -> str:
@@ -507,14 +463,6 @@ def service_tier_mismatch(agent: dict[str, Any]) -> str | None:
         f"{agent.get('agent_id') or 'unknown'} role {role} expected service tier "
         f"{('/'.join(sorted(expected)))} aliases, observed {observed}"
     )
-
-
-def elapsed_ms(start: str | None, end: str | None) -> int | None:
-    start_time = parse_timestamp(start)
-    end_time = parse_timestamp(end)
-    if start_time is None or end_time is None:
-        return None
-    return max(0, round((end_time - start_time).total_seconds() * 1000))
 
 
 def compact_token_usage(events: list[dict[str, Any]]) -> dict[str, int] | None:
@@ -1087,15 +1035,6 @@ def binding_uncertainty_messages(
     return labels
 
 
-def lifecycle_incomplete_messages(agents: list[dict[str, Any]]) -> list[str]:
-    return [
-        f"{agent.get('agent_id') or 'unknown'} has nonterminal status "
-        f"{agent.get('status') or 'unknown'} without terminal or reclaim evidence"
-        for agent in agents
-        if agent.get("status") not in TERMINAL_AGENT_STATUSES
-    ]
-
-
 def zero_yield_messages(agents: list[dict[str, Any]]) -> list[str]:
     """Identify completed children that produced no observable work or answer."""
     return [
@@ -1106,52 +1045,6 @@ def zero_yield_messages(agents: list[dict[str, Any]]) -> list[str]:
         and agent.get("tool_calls") == 0
         and agent.get("final_message_chars") == 0
     ]
-
-
-def delivery_failure_messages(agents: list[dict[str, Any]]) -> list[str]:
-    """Completed child did tool work but exposed no final answer."""
-    return [
-        f"{agent.get('agent_id') or 'unknown'} completed after tool activity without a final message"
-        for agent in agents
-        if agent.get("status") == "completed"
-        and int(agent.get("tool_calls") or 0) > 0
-        and int(agent.get("final_message_chars") or 0) == 0
-    ]
-
-
-def fork_request_observation_mismatch_messages(
-    attempts: list[dict[str, Any]], agents: list[dict[str, Any]]
-) -> list[str]:
-    """Report only explicit request/child metadata contradictions."""
-    agents_by_id = {agent.get("agent_id"): agent for agent in agents}
-    messages: list[str] = []
-    for attempt in attempts:
-        requested = attempt.get("requested_fork_turns")
-        valid_request = (
-            isinstance(requested, str)
-            and requested in {"none", "all"}
-        ) or (
-            isinstance(requested, int)
-            and not isinstance(requested, bool)
-            and requested > 0
-        )
-        if not valid_request:
-            continue
-        agent = agents_by_id.get(attempt.get("agent_id"))
-        if not isinstance(agent, dict):
-            continue
-        observed = agent.get("fork_observed")
-        if observed is None:
-            continue
-        mismatch = requested == "none" and observed is True
-        mismatch = mismatch or requested != "none" and observed is False
-        if mismatch:
-            actual = "forked" if observed else "not-forked"
-            messages.append(
-                f"{agent.get('agent_id') or 'unknown'} requested fork_turns={requested} "
-                f"but child metadata proves {actual}"
-            )
-    return messages
 
 
 def observed_window(
@@ -1484,77 +1377,21 @@ def audit_records(root: Path) -> dict[str, Any]:
                 f"{record_id}: child_metric_boundary_version marker must be a "
                 "non-negative integer"
             )
-        lifecycle_policy_version = (
-            collector.get("lifecycle_policy_version", 0)
-            if isinstance(collector, dict)
-            else 0
-        )
-        if isinstance(lifecycle_policy_version, bool) or not isinstance(
-            lifecycle_policy_version, int
+        for version_field, classify, anomaly, label in (
+            ("lifecycle_policy_version", lifecycle_incomplete_messages,
+             "child-lifecycle-incomplete", "nonterminal child lifecycle"),
+            ("zero_yield_policy_version", zero_yield_messages,
+             "zero-yield-child", "completed zero-yield child"),
+            ("delivery_failure_policy_version", delivery_failure_messages,
+             "child-delivery-failure", "completed child delivery failure"),
         ):
-            errors.append(
-                f"{record_id}: lifecycle_policy_version marker must be an integer"
-            )
-            lifecycle_policy_version = 0
-        lifecycle_issues = lifecycle_incomplete_messages(valid_agents)
-        if (
-            lifecycle_policy_version >= 1
-            and lifecycle_issues
-            and "child-lifecycle-incomplete"
-            not in anomaly_types_by_record.get(record_id, set())
-        ):
-            errors.append(
-                f"{record_id}: nonterminal child lifecycle lacks "
-                "child-lifecycle-incomplete anomaly: "
-                + "; ".join(lifecycle_issues)
-            )
-        zero_yield_policy_version = (
-            collector.get("zero_yield_policy_version", 0)
-            if isinstance(collector, dict)
-            else 0
-        )
-        if isinstance(zero_yield_policy_version, bool) or not isinstance(
-            zero_yield_policy_version, int
-        ):
-            errors.append(
-                f"{record_id}: zero_yield_policy_version marker must be an integer"
-            )
-            zero_yield_policy_version = 0
-        zero_yield_issues = zero_yield_messages(valid_agents)
-        if (
-            zero_yield_policy_version >= 1
-            and zero_yield_issues
-            and "zero-yield-child" not in anomaly_types_by_record.get(record_id, set())
-        ):
-            errors.append(
-                f"{record_id}: completed zero-yield child lacks "
-                "zero-yield-child anomaly: "
-                + "; ".join(zero_yield_issues)
-            )
-        delivery_policy_version = (
-            collector.get("delivery_failure_policy_version", 0)
-            if isinstance(collector, dict)
-            else 0
-        )
-        if isinstance(delivery_policy_version, bool) or not isinstance(
-            delivery_policy_version, int
-        ):
-            errors.append(
-                f"{record_id}: delivery_failure_policy_version marker must be an integer"
-            )
-            delivery_policy_version = 0
-        delivery_issues = delivery_failure_messages(valid_agents)
-        if (
-            delivery_policy_version >= 1
-            and delivery_issues
-            and "child-delivery-failure"
-            not in anomaly_types_by_record.get(record_id, set())
-        ):
-            errors.append(
-                f"{record_id}: completed child delivery failure lacks "
-                "child-delivery-failure anomaly: "
-                + "; ".join(delivery_issues)
-            )
+            version = collector.get(version_field, 0) if isinstance(collector, dict) else 0
+            if isinstance(version, bool) or not isinstance(version, int):
+                errors.append(f"{record_id}: {version_field} marker must be an integer")
+                version = 0
+            issues = classify(valid_agents)
+            if version >= 1 and issues and anomaly not in anomaly_types_by_record.get(record_id, set()):
+                errors.append(f"{record_id}: {label} lacks {anomaly} anomaly: " + "; ".join(issues))
         for index, agent in enumerate(valid_agents):
             metric_validity = agent.get("metric_validity")
             metric_scope = agent.get("metric_scope")

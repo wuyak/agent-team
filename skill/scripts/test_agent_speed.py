@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import agent_policy
+from test_agent_policy import build_test_policy
 
 
 SCRIPT = Path(__file__).with_name("agent_speed.py")
@@ -25,18 +26,16 @@ class AgentSpeedTests(unittest.TestCase):
         home = Path(directory) / ".codex"
         agents = home / "agents"
         agents.mkdir(parents=True)
-        policy = agent_policy.load_policy()
+        policy = build_test_policy()
         (home / agent_policy.POLICY_FILENAME).write_text(
             agent_policy.render_policy(policy), encoding="utf-8"
         )
         (home / "config.toml").write_text(
             '[features]\nfast_mode = true\n', encoding="utf-8"
         )
-        source_agents = agent_policy.default_codex_home() / "agents"
         for expected in agent_policy.profile_expectations(policy).values():
-            source = source_agents / expected["filename"]
             (agents / expected["filename"]).write_text(
-                source.read_text(encoding="utf-8"), encoding="utf-8"
+                f'service_tier = "{expected["service_tier"]}"\n', encoding="utf-8"
             )
         return home
 
@@ -63,9 +62,16 @@ class AgentSpeedTests(unittest.TestCase):
             home = self.make_home(directory)
             policy_path = home / agent_policy.POLICY_FILENAME
             before = policy_path.read_bytes()
+            profile_paths = sorted((home / "agents").glob("*.toml"))
+            profiles_before = {
+                path: path.read_bytes() for path in profile_paths
+            }
             result = self.run_controller(home, "set", "luna", "fast", "--dry-run")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(policy_path.read_bytes(), before)
+            self.assertEqual(
+                {path: path.read_bytes() for path in profile_paths}, profiles_before
+            )
 
     def test_switch_updates_policy_and_only_matching_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -80,6 +80,23 @@ def _history_rows(policy: dict[str, Any], field: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _history_for(
+    policy: dict[str, Any], field: str, key: str, value: str
+) -> list[dict[str, Any]]:
+    """Return history entries belonging to one model or role."""
+    return [row for row in policy[field] if row[key] == value]
+
+
+def _latest_at_or_before(
+    rows: list[dict[str, Any]], started: datetime
+) -> dict[str, Any] | None:
+    """Return the latest history entry effective at ``started``."""
+    selected = [
+        row for row in rows if parse_timestamp(row["effective_at"]) <= started
+    ]
+    return selected[-1] if selected else None
+
+
 def validate_policy(policy: dict[str, Any]) -> None:
     if policy.get("version") != 1:
         raise PolicyError("policy version must be 1")
@@ -212,7 +229,7 @@ def expected_role_runtimes(
 ) -> tuple[tuple[str, str], ...] | None:
     if role not in policy["roles"]:
         return None
-    rows = [row for row in policy["role_runtime_history"] if row["role"] == role]
+    rows = _history_for(policy, "role_runtime_history", "role", role)
     started = parse_timestamp(started_at)
     if started is None:
         values: list[tuple[str, str]] = []
@@ -221,10 +238,9 @@ def expected_role_runtimes(
             if pair not in values:
                 values.append(pair)
         return tuple(values)
-    selected = [row for row in rows if parse_timestamp(row["effective_at"]) <= started]
-    if not selected:
+    row = _latest_at_or_before(rows, started)
+    if row is None:
         return None
-    row = selected[-1]
     return ((row["model"], row["reasoning_effort"]),)
 
 
@@ -237,14 +253,14 @@ def expected_service_tier_aliases(
     started = parse_timestamp(started_at)
     aliases: set[str] = set()
     for model, _effort in runtimes:
-        rows = [row for row in policy["service_tier_history"] if row["model"] == model]
+        rows = _history_for(policy, "service_tier_history", "model", model)
         if started is None:
             for row in rows:
                 aliases.update(tier_aliases(row["service_tier"]))
             continue
-        selected = [row for row in rows if parse_timestamp(row["effective_at"]) <= started]
-        if selected:
-            aliases.update(tier_aliases(selected[-1]["service_tier"]))
+        row = _latest_at_or_before(rows, started)
+        if row is not None:
+            aliases.update(tier_aliases(row["service_tier"]))
     return aliases or None
 
 
@@ -263,24 +279,16 @@ def runtime_expectation(
     if started is None:
         return None
 
-    runtime_rows = [
-        row
-        for row in policy["role_runtime_history"]
-        if row["role"] == role and parse_timestamp(row["effective_at"]) <= started
-    ]
-    if not runtime_rows:
+    runtime_rows = _history_for(policy, "role_runtime_history", "role", role)
+    runtime_row = _latest_at_or_before(runtime_rows, started)
+    if runtime_row is None:
         return None
-    runtime_row = runtime_rows[-1]
     model = runtime_row["model"]
 
-    tier_rows = [
-        row
-        for row in policy["service_tier_history"]
-        if row["model"] == model and parse_timestamp(row["effective_at"]) <= started
-    ]
-    if not tier_rows:
+    tier_rows = _history_for(policy, "service_tier_history", "model", model)
+    tier_row = _latest_at_or_before(tier_rows, started)
+    if tier_row is None:
         return None
-    tier_row = tier_rows[-1]
     configured_sandbox = policy["roles"][role]["sandbox_mode"]
     return {
         "policy_version": policy["version"],

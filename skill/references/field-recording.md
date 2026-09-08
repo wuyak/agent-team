@@ -479,5 +479,6 @@ run the complete recorder suite only when the change spans the collector or sche
 
     python3 -m unittest scripts/test_record_hook.py scripts/test_record_closeout.py scripts/test_record_common.py
     python3 -m py_compile scripts/record_common.py scripts/record_hook.py scripts/record_closeout.py
+    python3 scripts/validate_agent_team.py
     python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" \
       "${CODEX_HOME:-$HOME/.codex}/skills/agent-team"

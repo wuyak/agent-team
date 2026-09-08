@@ -164,12 +164,14 @@ def command_set(args: argparse.Namespace) -> int:
             (path, replace_profile_tier(path, expected["service_tier"]))
         )
 
-    validate_fast_feature(codex_home, updated)
     if not changed:
         rows = validate_managed_configuration(codex_home, policy)
         print_status(policy, rows)
         print("No changes: requested tier is already active.")
         return 0
+
+    # Validate the target policy before the dry-run or any file replacement.
+    validate_fast_feature(codex_home, updated)
 
     print(
         f"Plan: {model} -> {canonical_tier(args.tier)}; "

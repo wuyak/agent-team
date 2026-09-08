@@ -2,7 +2,8 @@
 
 The hook and closeout entrypoints have different lifecycle and evidence
 policies, but they consume the same small set of native transcript shapes.
-Keep those pure classifiers here so the two paths cannot drift accidentally.
+Keep shared classifiers, metric defaults, and evidence checks here; callers
+retain the distinct observability rules for live collection and historical replay.
 """
 
 from __future__ import annotations
@@ -208,3 +209,125 @@ def parse_timestamp(value: Any) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+TERMINAL_AGENT_STATUSES = {"completed", "errored", "interrupted"}
+
+
+def lifecycle_incomplete_messages(agents: list[dict[str, Any]]) -> list[str]:
+    return [
+        f"{agent.get('agent_id') or 'unknown'} has nonterminal status "
+        f"{agent.get('status') or 'unknown'} without terminal or reclaim evidence"
+        for agent in agents
+        if agent.get("status") not in TERMINAL_AGENT_STATUSES
+    ]
+
+
+def delivery_failure_messages(agents: list[dict[str, Any]]) -> list[str]:
+    """Completed child did tool work but exposed no final answer."""
+    return [
+        f"{agent.get('agent_id') or 'unknown'} completed after tool activity without a final message"
+        for agent in agents
+        if agent.get("status") == "completed"
+        and int(agent.get("tool_calls") or 0) > 0
+        and int(agent.get("final_message_chars") or 0) == 0
+    ]
+
+
+def fork_request_observation_mismatch_messages(
+    attempts: list[dict[str, Any]], agents: list[dict[str, Any]]
+) -> list[str]:
+    """Report only explicit request/child metadata contradictions."""
+    agents_by_id = {agent.get("agent_id"): agent for agent in agents}
+    messages: list[str] = []
+    for attempt in attempts:
+        requested = attempt.get("requested_fork_turns")
+        valid_request = (
+            isinstance(requested, str)
+            and requested in {"none", "all"}
+        ) or (
+            isinstance(requested, int)
+            and not isinstance(requested, bool)
+            and requested > 0
+        )
+        if not valid_request:
+            continue
+        agent = agents_by_id.get(attempt.get("agent_id"))
+        if not isinstance(agent, dict):
+            continue
+        observed = agent.get("fork_observed")
+        if observed is None:
+            continue
+        mismatch = requested == "none" and observed is True
+        mismatch = mismatch or requested != "none" and observed is False
+        if mismatch:
+            actual = "forked" if observed else "not-forked"
+            messages.append(
+                f"{agent.get('agent_id') or 'unknown'} requested fork_turns={requested} "
+                f"but child metadata proves {actual}"
+            )
+    return messages
+
+
+def parent_message_phase(payload: dict[str, Any], turn_id: str | None) -> str | None:
+    """Return a phase only for an identity-bound parent assistant message."""
+    if payload.get("type") != "message" or payload.get("role") != "assistant":
+        return None
+    metadata = payload.get("internal_chat_message_metadata_passthrough")
+    metadata_turn_id = (
+        metadata.get("turn_id")
+        if isinstance(metadata, dict) and isinstance(metadata.get("turn_id"), str)
+        else None
+    )
+    if not isinstance(metadata_turn_id, str) or turn_id is None or metadata_turn_id != turn_id:
+        return None
+    phase = payload.get("phase")
+    return phase if phase in {"commentary", "final_answer"} else "unknown"
+
+
+def elapsed_ms(start: str | None, end: str | None) -> int | None:
+    start_time = parse_timestamp(start)
+    end_time = parse_timestamp(end)
+    if start_time is None or end_time is None:
+        return None
+    return max(0, round((end_time - start_time).total_seconds() * 1000))
+
+
+def empty_coordination_metrics(
+    *, observability: str = "unknown", source: str = "not_observed",
+    evidence: str = "not_observed"
+) -> dict[str, Any]:
+    return {
+        "version": COORDINATION_CLASSIFIER_VERSION,
+        "observability": observability,
+        "source": source,
+        "operation_counts": {operation: 0 for operation in COORDINATION_OPERATIONS},
+        "operation_observability": {
+            operation: evidence for operation in COORDINATION_OPERATIONS
+        },
+        "wait_outcomes": {outcome: 0 for outcome in WAIT_OUTCOMES},
+        "parent_message_phase_counts": {
+            "commentary": 0,
+            "final_answer": 0,
+            "unknown": 0,
+        },
+        "parent_message_observability": evidence,
+        "child_handback_counts": {
+            "message": 0,
+            "final_answer": 0,
+            "unknown": 0,
+        },
+        "child_handback_observability": evidence,
+        "requested_wait_ms": None,
+        "observed_wait_ms": None,
+        "requested_wait_ms_observability": "not_observed",
+        "observed_wait_ms_observability": "not_observed",
+        "max_consecutive_timeout_without_agent_update": 0,
+        "timeout_without_agent_update_count": 0,
+        # No native event currently proves these transitions.  In particular,
+        # a completed PostToolUse is not an applied steering acknowledgement.
+        "commitment": "not_observed",
+        "ready_transition": "not_observed",
+        "steering_applied": "not_observed",
+        "native_live_status": "not_observed",
+    }

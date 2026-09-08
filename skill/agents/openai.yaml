@@ -1,6 +1,6 @@
 interface:
   display_name: "Agent Team"
   short_description: "Evaluate, dispatch, and track native Codex agents"
-  default_prompt: "Use $agent-team to keep a compact context-local lane ledger without default artifacts, dispatch every ready independent lane with positive delegation value, preserve lane identity across follow-ups, contain shared failures with a canary, and return compact results to the calling workflow."
+  default_prompt: "Use $agent-team to identify useful delegation, select suitable roles, prepare self-contained assignments, coordinate work, and assess and integrate returned results. Delegation is optional and does not require parallel work."
 policy:
   allow_implicit_invocation: true
