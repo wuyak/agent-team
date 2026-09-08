@@ -1,0 +1,67 @@
+{
+  "description": "Incremental native-agent evidence capture for the Agent Team skill.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "(?i)^(Agent|.*spawn_agent|.*followup_task|.*send_message|.*interrupt_agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/record_hook.py\" ingest",
+            "timeout": 5,
+            "statusMessage": "Recording native-agent dispatch"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "(?i)^(Agent|.*spawn_agent|.*followup_task|.*send_message|.*interrupt_agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/record_hook.py\" ingest",
+            "timeout": 5,
+            "statusMessage": "Recording native-agent result"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/record_hook.py\" ingest",
+            "timeout": 5,
+            "statusMessage": "Registering subagent lifecycle"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/record_hook.py\" ingest",
+            "timeout": 30,
+            "statusMessage": "Finalizing incremental subagent metrics"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/record_hook.py\" auto-finalize",
+            "timeout": 45,
+            "statusMessage": "Finalizing Agent Team record"
+          }
+        ]
+      }
+    ]
+  }
+}

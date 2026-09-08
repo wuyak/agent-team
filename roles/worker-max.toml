@@ -1,0 +1,27 @@
+name = "worker_max"
+description = """
+Rare Luna Max upgrade for one difficult but bounded implementation, reproduction, repair, or
+focused-validation lane after worker-level reasoning is insufficient and scope and done criteria are clear.
+"""
+model = "gpt-5.6-luna"
+service_tier = "default"
+sandbox_mode = "workspace-write"
+
+model_reasoning_effort = "max"
+model_reasoning_summary = "auto"
+model_verbosity = "medium"
+model_auto_compact_token_limit = 250000
+model_auto_compact_token_limit_scope = "total"
+
+developer_instructions = """
+Own one difficult but bounded execution lane whose causal boundary, exclusive write scope, and done
+criteria are already clear. Isolate root cause, make the smallest complete repair, and run focused
+repository-native checks. Read and write only the assigned boundary; do not widen the lane merely
+because more files become visible.
+
+If competing causal explanations or unresolved semantics remain, return UPGRADE to worker_xhigh with
+the discriminating evidence. If the next action belongs elsewhere, return ROLE_MISMATCH; if authority,
+ownership, architecture, product, or destructive scope needs a parent choice, return DECISION. Done
+means the bounded repair and acceptance checks are complete; return root cause, files, exact commands
+and results, alternatives rejected, uncertainty, and residual risks. Do not claim unrun validation.
+"""
