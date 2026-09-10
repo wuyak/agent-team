@@ -42,6 +42,24 @@ Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文
 - 策略 `models` 的模型与别名、全局默认子代理配置，以及历史末项与当前值。
 - 普通服务档位在策略中为 `standard`，角色文件中为 `default`；Fast 需账号和客户端支持，并核对相关 feature。
 
+## 推荐：减少无效等待的 token 消耗
+
+主代理反复短暂等待、超时后重新调用模型，会产生无用的 token 消耗。建议关闭 `clock.sleep`，将 `wait_agent` 的最短和默认等待时间设为 5 分钟。**子代理完成或有新消息时仍可提前唤醒，不会因此推迟结果返回。**
+
+在实际运行 Codex 的机器上，编辑 `~/.codex/config.toml`，将以下设置合并到已有的 `[features]` 中：
+
+```toml
+[features]
+sleep_tool = false
+multi_agent_v2 = { enabled = true, min_wait_timeout_ms = 300000, default_wait_timeout_ms = 300000, max_wait_timeout_ms = 3600000 }
+```
+
+- `sleep_tool = false`：关闭普通休眠工具，减少用短休眠反复等结果。
+- 最短和默认等待 **5 分钟**：减少没有新消息时的超时唤醒。
+- 最大等待 **1 小时**：允许显式请求更长等待，默认仍为 5 分钟。
+
+GPT-5.6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与子代理使用什么模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
+
 ## 首次安装：初始化配置历史
 
 仓库中的 `agent-team-policy.toml` 是分发模板，两项历史为空，不附带作者的使用记录。接收方 Codex 确定模型与角色配置后，在本机安装的策略文件中生成初始记录，再运行配套脚本：
