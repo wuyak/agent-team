@@ -58,7 +58,8 @@ role it now needs.
 
 Give the child the objective and its purpose, assigned scope, available
 evidence, relevant decisions and dependencies, permitted operations,
-completion requirements, and expected return.
+completion requirements, and expected return. If the user wants progress
+in the parent task, specify what the child should report and when.
 
 A clear assignment does not require a known solution. Technical unknowns
 may be part of the work; unresolved user choices or missing authorization
@@ -84,17 +85,18 @@ identify that evidence as parent-assisted, not independently retrieved.
 
 ## Coordinate execution
 
-Continue useful work while children run; wait when the next action depends
-on their results or capacity is exhausted. Use bounded waits allowed by the
-runtime and higher-priority instructions. An unchanged timeout alone does
-not justify another status query or message. Use `list_agents` for
-contradictory state, explicit status requests, or capacity decisions.
+Continue independent work while children run. When no independent work
+remains, wait for child events using the runtime's child-wait tool
+(`wait_agent` where available) with its default timeout. An unchanged
+timeout alone does not justify another status query or message. Use
+`list_agents` for contradictory state, explicit status requests, or
+capacity decisions.
 
-Keep routine progress in the child task. Send an interim when the parent
-must act before completion, such as supplying information, resolving an
-authority boundary, or revising the assignment. Use available collaboration
-tools and the identifiers they accept. Report delivery from the actual
-result; delivery does not establish that the recipient acted on it.
+Send progress updates as agreed at handoff and interim messages when the
+parent must act before completion. Keep other progress in the child task.
+Use available collaboration tools and the identifiers they accept. Report
+delivery from the actual result; delivery does not establish that the
+recipient acted on it.
 
 Maintain clear ownership and avoid conflicting writes. Changes to scope,
 evidence, authority, or dependencies may invalidate work already underway.
@@ -138,16 +140,17 @@ errored, interrupted, or explicitly reclaimed.
 
 ## Monitor an existing target
 
-Observation continues until the named terminal condition is observed or
-the user ends monitoring. A blocker calls for notification, not automatic
-termination; continue observing unless told to stop. Progress snapshots,
-unchanged polls, temporary log silence, and intermediate phases are not
-final results.
+The monitor owns routine status and log checks for its assigned target.
+The parent queries the same target to intervene, resolve missing or
+conflicting evidence, or perform a separate acceptance check.
 
-If timely parent intervention is required, the child needs an available
-parent messaging channel; otherwise keep that observation with the parent.
+Assess completion against the named terminal condition or the user's
+explicit end to monitoring. Interim progress and requests for help are
+not final results.
 
-Post requested progress in child commentary at the agreed cadence.
+For required updates before completion, the child needs an available parent
+messaging channel; otherwise keep that observation with the parent.
+
 Measure elapsed time rather than counting polls. Read the clock before
 reporting current time; otherwise omit it. Distinguish event timestamps
 from current time.
