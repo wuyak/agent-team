@@ -33,16 +33,16 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 2. Write its capability manifest: inputs, tools, authority, output, done criteria, and escalation boundary.
 3. Start with the cheapest model that passes those tasks. Do not infer model class from the prestige of the job title.
 4. Configure a project-scoped agent with concrete instructions and least necessary sandbox access.
-5. Run smoke cases and compare it with the generic `explorer` or `worker` on correctness, intervention rate, latency, and cost.
+5. Run smoke cases and compare it with the generic `explorer` or `default` on correctness, intervention rate, latency, and cost.
 6. Keep it only when the specialist produces a stable advantage. Otherwise improve the calling Skill or context capsule.
 
 ## Useful Team Shapes
 
 - **Repository maintainer:** explorer maps ownership; project maintainer agent applies repository-specific invariants; main agent integrates.
 - **Release team:** release-evidence agent assembles changelog and test evidence; release operator performs bounded actions; main agent authorizes remote writes.
-- **Incident team:** telemetry specialist gathers live evidence; reproduction worker isolates the
-  fault; Sol XHigh is used only for evidenced competing causal models or semantic conflicts.
-- **Migration team:** source and target specialists validate their own systems; a bounded worker implements the transformer; main agent owns cutover decisions.
+- **Incident team:** telemetry specialist gathers live evidence; a `default` agent reproduces and
+  isolates the fault; `sol_xhigh` is used for evidenced competing causal models or semantic conflicts.
+- **Migration team:** source and target specialists validate their own systems; a `default` agent implements the transformer within scope; main agent owns cutover decisions.
 
 Add a reviewer or verifier only when it has an independent acceptance surface. Give it a compact
 evidence capsule and disputed claims; a second agent rereading the same full context with the same
@@ -50,6 +50,6 @@ tools is not automatically useful independence.
 
 ## Avoid Catalog Inflation
 
-Do not pre-create agents for every technology or job title. Begin with the seven generic primitives.
+Do not pre-create agents for every technology or job title. Begin with the six generic roles.
 Promote a specialist from repeated evidence, keep it close to the project whose capabilities it
 uses, and retire it when its distinction disappears.

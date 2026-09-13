@@ -40,8 +40,8 @@ For a new recurring specialist, read [professional-agents.md](professional-agent
 
 ## Initialize policy history
 
-The distributed policy is a template with empty histories. After selecting the receiving
-installation's models and roles, initialize the installed policy before using the policy scripts:
+For a policy template with empty histories, select the receiving installation's models and roles,
+then initialize the installed policy before using the policy scripts:
 
 - One `service_tier_history` entry per model: `effective_at`, `model`, `service_tier`.
 - One `role_runtime_history` entry per role: `effective_at`, `role`, `model`, `reasoning_effort`.
@@ -50,6 +50,12 @@ Use the actual configuration effective time in timezone-aware ISO 8601 format an
 the final settings. Remove the corresponding empty array declarations when adding table entries.
 Preserve existing local history and append actual changes. These histories are required by the
 policy scripts even when recording Hooks are disabled; an uninitialized template fails validation.
+
+When retiring or renaming a role, remove its old profile and current `roles` entry. Preserve its
+original runtime history and add `retired_roles.<old-name>` with `retired_at` and its last
+`sandbox_mode`. Historical lookups use that name only for starts before retirement; it does not
+remain a selectable role. A renamed role gets its own current entry and initial history row.
+For a strength change under the same name, append a runtime row at the actual change time.
 
 ## Change service tiers
 

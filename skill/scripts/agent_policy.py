@@ -87,6 +87,22 @@ def _history_for(
     return [row for row in policy[field] if row[key] == value]
 
 
+def _retired_roles(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return optional retirement metadata, validating its small schema."""
+    retired = policy.get("retired_roles", {})
+    if not isinstance(retired, dict):
+        raise PolicyError("retired_roles must be a table")
+    for role, metadata in retired.items():
+        if not isinstance(role, str) or not role:
+            raise PolicyError("retired role names must be non-empty strings")
+        metadata = _require_mapping(metadata, f"retired_roles.{role}")
+        if parse_timestamp(metadata.get("retired_at")) is None:
+            raise PolicyError(f"retired_roles.{role}.retired_at must be ISO-8601")
+        if metadata.get("sandbox_mode") not in VALID_SANDBOXES:
+            raise PolicyError(f"retired_roles.{role}.sandbox_mode is invalid")
+    return retired
+
+
 def _latest_at_or_before(
     rows: list[dict[str, Any]], started: datetime
 ) -> dict[str, Any] | None:
@@ -138,6 +154,12 @@ def validate_policy(policy: dict[str, Any]) -> None:
         if spec.get("sandbox_mode") not in VALID_SANDBOXES:
             raise PolicyError(f"roles.{role}.sandbox_mode is invalid")
 
+    retired_roles = _retired_roles(policy)
+    overlapping_roles = set(roles).intersection(retired_roles)
+    if overlapping_roles:
+        role = sorted(overlapping_roles)[0]
+        raise PolicyError(f"role is both current and retired: {role}")
+
     service_rows = _history_rows(policy, "service_tier_history")
     service_seen: dict[str, datetime] = {}
     latest_service: dict[str, str] = {}
@@ -161,7 +183,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
     latest_runtime: dict[str, tuple[str, str]] = {}
     for row in runtime_rows:
         role = row.get("role")
-        if role not in roles:
+        if role not in roles and role not in retired_roles:
             raise PolicyError(f"role_runtime_history has unknown role: {role}")
         effective = parse_timestamp(row.get("effective_at"))
         if effective is None:
@@ -174,10 +196,19 @@ def validate_policy(policy: dict[str, Any]) -> None:
         if not isinstance(model, str) or not model or not isinstance(effort, str) or not effort:
             raise PolicyError(f"runtime history for {role} is incomplete")
         latest_runtime[role] = (model, effort)
+        if role in retired_roles:
+            retired_at = parse_timestamp(retired_roles[role]["retired_at"])
+            if retired_at is None or effective >= retired_at:
+                raise PolicyError(
+                    f"runtime history for retired role {role} is at or after retirement"
+                )
     for role, spec in roles.items():
         current = (spec["model"], spec["reasoning_effort"])
         if latest_runtime.get(role) != current:
             raise PolicyError(f"current runtime for {role} disagrees with history")
+    for role in retired_roles:
+        if role not in runtime_seen:
+            raise PolicyError(f"retired role {role} has no runtime history")
 
 
 def load_policy(
@@ -227,17 +258,26 @@ def policy_requires_fast_mode(policy: dict[str, Any]) -> bool:
 def expected_role_runtimes(
     policy: dict[str, Any], role: str, started_at: Any
 ) -> tuple[tuple[str, str], ...] | None:
-    if role not in policy["roles"]:
+    if role not in policy["roles"] and role not in policy.get("retired_roles", {}):
         return None
     rows = _history_for(policy, "role_runtime_history", "role", role)
     started = parse_timestamp(started_at)
     if started is None:
+        # A retired role has no current default. Without a timestamp there is
+        # no safe way to decide whether any historical row applies.
+        if role not in policy["roles"]:
+            return None
         values: list[tuple[str, str]] = []
         for row in rows:
             pair = (row["model"], row["reasoning_effort"])
             if pair not in values:
                 values.append(pair)
         return tuple(values)
+    retirement = policy.get("retired_roles", {}).get(role)
+    if retirement is not None:
+        retired_at = parse_timestamp(retirement["retired_at"])
+        if retired_at is None or started >= retired_at:
+            return None
     row = _latest_at_or_before(rows, started)
     if row is None:
         return None
@@ -273,11 +313,21 @@ def runtime_expectation(
     keeps that absence separate from the controller expectation by returning
     the exact policy row that applied when the child started.
     """
-    if not isinstance(role, str) or role not in policy["roles"]:
+    if not isinstance(role, str):
         return None
     started = parse_timestamp(started_at)
     if started is None:
         return None
+
+    roles = policy["roles"]
+    retired_roles = policy.get("retired_roles", {})
+    if role not in roles and role not in retired_roles:
+        return None
+    retirement = retired_roles.get(role)
+    if retirement is not None:
+        retired_at = parse_timestamp(retirement["retired_at"])
+        if retired_at is None or started >= retired_at:
+            return None
 
     runtime_rows = _history_for(policy, "role_runtime_history", "role", role)
     runtime_row = _latest_at_or_before(runtime_rows, started)
@@ -289,7 +339,11 @@ def runtime_expectation(
     tier_row = _latest_at_or_before(tier_rows, started)
     if tier_row is None:
         return None
-    configured_sandbox = policy["roles"][role]["sandbox_mode"]
+    configured_sandbox = (
+        roles[role]["sandbox_mode"]
+        if role in roles
+        else retired_roles[role]["sandbox_mode"]
+    )
     return {
         "policy_version": policy["version"],
         "role": role,
@@ -356,6 +410,15 @@ def render_policy(policy: dict[str, Any]) -> str:
                 f"model = {_quoted(spec['model'])}",
                 f"reasoning_effort = {_quoted(spec['reasoning_effort'])}",
                 f"sandbox_mode = {_quoted(spec['sandbox_mode'])}",
+                "",
+            ]
+        )
+    for role, metadata in policy.get("retired_roles", {}).items():
+        lines.extend(
+            [
+                f"[retired_roles.{_quoted(role)}]",
+                f"retired_at = {_quoted(metadata['retired_at'])}",
+                f"sandbox_mode = {_quoted(metadata['sandbox_mode'])}",
                 "",
             ]
         )

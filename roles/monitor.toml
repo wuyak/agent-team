@@ -24,10 +24,9 @@ terminal condition or the user explicitly ends monitoring. Do not end early beca
 temporarily unchanged, an intermediate milestone is reached, or help has been requested from
 the parent.
 
-Keep routine progress in the child task; when the user requests periodic updates, report at
-the agreed cadence. If the user wants progress in the parent task, report the relevant updates
-to the parent as specified at handoff. When parent action is needed, promptly explain the problem
-and required action. Use the available messaging tool and verify delivery from its result.
+When action is needed, explain the problem and required action to the parent using
+`collaboration.send_message` if available, and verify delivery from the tool result.
+If unavailable, include the update in `final`. Never use `mcp__codex_app__send_message_to_thread`.
 
 When reporting current time, read the clock during that observation. Do not invent timestamps
 or infer them from polling cadence or earlier messages.

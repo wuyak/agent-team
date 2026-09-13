@@ -11,7 +11,7 @@ Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文
 | 来源 | 用途与目标位置 |
 | --- | --- |
 | [skill/](skill/) | 方法、参考与脚本 → `<codex-home>/skills/agent-team/` |
-| [roles/](roles/) | 7 个角色 → `<codex-home>/agents/` |
+| [roles/](roles/) | 6 个角色 → `<codex-home>/agents/` |
 | [agent-team-policy.toml](agent-team-policy.toml) | 模型、档位与变更历史 → `<codex-home>/agent-team-policy.toml` |
 | [config.fragment.toml](config.fragment.toml) | 合并到 `<codex-home>/config.toml` 的 `[agents]` |
 | [hooks.example.json](hooks.example.json) | 按客户端要求合并到 Hooks 配置 |
@@ -24,15 +24,16 @@ Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文
 
 | 角色 | 职责 | 当前模型／推理强度 |
 | --- | --- | --- |
-| `default` | 有界的通用工作 | Luna / high |
-| `explorer` | 只读检索与证据发现 | Luna / medium |
+| `default` | 默认承担范围明确的通用与工程任务 | Luna / xhigh |
+| `explorer` | 只读检索与证据发现 | Luna / high |
 | `reviewer` | 独立只读审查 | Luna / high |
-| `worker` | 明确范围的实现、修复与验证 | Luna / xhigh |
+| `worker` | 同类执行任务需要更多推理时使用，可直接选择 | Luna / max |
 | `monitor` | 持续观察已运行目标 | Luna / medium |
-| `worker_max` | 普通执行推理不足时升级 | Luna / max |
-| `worker_xhigh` | 处理语义冲突、竞争解释等难题 | Sol / xhigh |
+| `sol_xhigh` | 处理语义冲突、竞争解释等难题 | Sol / xhigh |
 
 完整模型名、压缩阈值和权限设置以 TOML 为准，需当前客户端和账号支持。角色中的 `sandbox_mode` 表达权限意图，实际隔离由父任务与运行时决定。
+
+角色改名或合并时，移除旧角色文件和当前策略项，并按[配置维护说明](skill/references/configuration.md#initialize-policy-history)保留原名历史和退役时间；同名角色更换强度则追加生效记录。
 
 需要增设长期承担某类工作的项目代理时，读[专业代理参考](skill/references/professional-agents.md)，判断是否值得独立配置，以及如何划分工具、Skill 与代理的职责。
 

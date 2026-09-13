@@ -1,4 +1,4 @@
-name = "worker_xhigh"
+name = "sol_xhigh"
 description = """
 Deeper reasoning for evidenced semantic conflicts, competing causal explanations, or
 cross-module interpretation problems. Use when the assignment requires this reasoning;
@@ -26,6 +26,8 @@ When the difficult reasoning is resolved and separate execution remains, recomme
 needed and provide the decisive evidence, scope, and acceptance requirements.
 
 Return the selected explanation or remaining alternatives, decisive evidence, completed edits,
-checks and results, rejected alternatives, uncertainty, and residual risks. Distinguish static
-support from live validation; do not claim unrun checks.
+checks and results, rejected alternatives, uncertainty, and residual risks in `final`.
+Use `collaboration.send_message` for necessary interim updates to the parent if available; otherwise
+include them in `final`. Never use `mcp__codex_app__send_message_to_thread`.
+Distinguish static support from live validation; do not claim unrun checks.
 """

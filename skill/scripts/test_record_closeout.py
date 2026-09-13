@@ -1121,6 +1121,7 @@ class RecordCloseoutTests(unittest.TestCase):
                                 "role": "worker_xhigh",
                                 "model": "gpt-5.6-luna",
                                 "reasoning_effort": "xhigh",
+                                "started_at": "2026-08-04T00:00:00Z",
                                 "turn_count": 1,
                             }
                         ],
@@ -1755,7 +1756,12 @@ class RecordCloseoutTests(unittest.TestCase):
         )
         self.assertIsNotNone(
             RECORD_CLOSEOUT.service_tier_mismatch(
-                {**agent, "actual_role": "worker_xhigh", "service_tier": "fast"}
+                {
+                    **agent,
+                    "actual_role": "worker_xhigh",
+                    "service_tier": "fast",
+                    "started_at": "2026-08-04T00:00:00Z",
+                }
             )
         )
         mixed = {

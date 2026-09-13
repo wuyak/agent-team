@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -168,6 +169,25 @@ def build_test_policy() -> dict[str, Any]:
     return policy
 
 
+def build_retired_policy() -> dict[str, Any]:
+    """Keep old runtime rows while removing retired roles from current profiles."""
+    policy = build_test_policy()
+    for role in ("worker_max", "worker_xhigh"):
+        policy["roles"].pop(role)
+    policy["retired_roles"] = {
+        "worker_max": {
+            "retired_at": "2026-08-10T00:00:00Z",
+            "sandbox_mode": "workspace-write",
+        },
+        "worker_xhigh": {
+            "retired_at": "2026-08-10T00:00:00Z",
+            "sandbox_mode": "workspace-write",
+        },
+    }
+    agent_policy.validate_policy(policy)
+    return policy
+
+
 class AgentPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -205,6 +225,101 @@ class AgentPolicyTests(unittest.TestCase):
             ),
             (("gpt-5.6-sol", "xhigh"),),
         )
+
+    def test_retired_roles_keep_timestamped_history_without_current_defaults(self) -> None:
+        policy = build_retired_policy()
+        self.assertNotIn("worker_max", agent_policy.profile_expectations(policy))
+        self.assertNotIn("worker_xhigh", agent_policy.profile_expectations(policy))
+        self.assertEqual(
+            agent_policy.expected_role_runtimes(
+                policy, "worker_xhigh", "2026-08-03T08:54:21Z"
+            ),
+            (("gpt-5.6-terra", "max"),),
+        )
+        self.assertEqual(
+            agent_policy.expected_role_runtimes(
+                policy, "worker_xhigh", "2026-08-03T08:54:23Z"
+            ),
+            (("gpt-5.6-sol", "xhigh"),),
+        )
+        self.assertIsNone(
+            agent_policy.expected_role_runtimes(
+                policy, "worker_xhigh", "2026-08-10T00:00:00Z"
+            )
+        )
+        self.assertIsNone(
+            agent_policy.expected_role_runtimes(policy, "worker_xhigh", None)
+        )
+
+    def test_retired_runtime_expectation_uses_retirement_sandbox_before_cutoff(self) -> None:
+        policy = build_retired_policy()
+        expectation = agent_policy.runtime_expectation(
+            policy, "worker_xhigh", "2026-08-03T08:54:23Z"
+        )
+        self.assertIsNotNone(expectation)
+        assert expectation is not None
+        self.assertEqual(expectation["model"], "gpt-5.6-sol")
+        self.assertEqual(expectation["reasoning_effort"], "xhigh")
+        self.assertEqual(expectation["configured_sandbox_mode"], "workspace-write")
+        self.assertIsNone(
+            agent_policy.runtime_expectation(
+                policy, "worker_xhigh", "2026-08-10T00:00:00Z"
+            )
+        )
+
+    def test_retired_metadata_renders_and_loads_without_obsolete_profile_fields(self) -> None:
+        policy = build_retired_policy()
+        rendered = agent_policy.render_policy(policy)
+        self.assertIn('[retired_roles."worker_max"]', rendered)
+        self.assertIn('sandbox_mode = "workspace-write"', rendered)
+        self.assertNotIn("[roles.worker_max]", rendered)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / agent_policy.POLICY_FILENAME
+            path.write_text(rendered, encoding="utf-8")
+            loaded = agent_policy.load_policy(explicit_path=path)
+        self.assertEqual(loaded["retired_roles"], policy["retired_roles"])
+
+    def test_retired_role_history_requires_explicit_metadata_and_cutoff(self) -> None:
+        missing_metadata = copy.deepcopy(self.policy)
+        missing_metadata["roles"].pop("worker_xhigh")
+        with self.assertRaises(agent_policy.PolicyError):
+            agent_policy.validate_policy(missing_metadata)
+
+        after_retirement = build_retired_policy()
+        after_retirement["role_runtime_history"].append(
+            {
+                "effective_at": "2026-08-11T00:00:00Z",
+                "role": "worker_xhigh",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+            }
+        )
+        with self.assertRaises(agent_policy.PolicyError):
+            agent_policy.validate_policy(after_retirement)
+
+        at_retirement = build_retired_policy()
+        at_retirement["role_runtime_history"].append(
+            {
+                "effective_at": "2026-08-10T00:00:00Z",
+                "role": "worker_xhigh",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+            }
+        )
+        with self.assertRaises(agent_policy.PolicyError):
+            agent_policy.validate_policy(at_retirement)
+
+        unknown = build_retired_policy()
+        unknown["role_runtime_history"].append(
+            {
+                "effective_at": "2026-08-04T00:00:00Z",
+                "role": "worker_typo",
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "high",
+            }
+        )
+        with self.assertRaises(agent_policy.PolicyError):
+            agent_policy.validate_policy(unknown)
 
     def test_runtime_expectation_keeps_expected_tier_separate_from_observation(self) -> None:
         expectation = agent_policy.runtime_expectation(

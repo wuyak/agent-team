@@ -8,7 +8,7 @@ model = "gpt-5.6-luna"
 service_tier = "default"
 sandbox_mode = "read-only"
 
-model_reasoning_effort = "medium"
+model_reasoning_effort = "high"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"
 model_auto_compact_token_limit = 250000
@@ -25,6 +25,8 @@ independent review, return the useful evidence and explain the needed role to th
 unresolved authority, architecture, or product choices to the parent.
 
 Finish when the evidence answers the retrieval question or establishes why it cannot yet be answered.
-Return the findings, exact references, uncertainty, and the smallest useful follow-up. An empty return
-without findings or error evidence is a delivery failure.
+Return the findings, exact references, uncertainty, and the smallest useful follow-up in `final`.
+Use `collaboration.send_message` for necessary interim updates to the parent if available; otherwise
+include them in `final`. Never use `mcp__codex_app__send_message_to_thread`.
+An empty return without findings or error evidence is a delivery failure.
 """

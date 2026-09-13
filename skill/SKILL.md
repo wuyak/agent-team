@@ -40,12 +40,11 @@ and configured capabilities.
 | Role | When to use |
 | --- | --- |
 | `explorer` | Retrieval and information gathering: locate code, files, logs, or documentation and organize relevant facts, references, and unknowns. Answers where something is, what exists, and what the evidence records; root-cause diagnosis, reproduction, and repair belong to execution roles. |
-| `worker` | Default for bounded execution: investigation, implementation, reproduction, repair, or validation. Resolves technical questions within the assignment without requiring the parent to prescribe the complete method. |
-| `worker_max` | Difficult execution with a clear scope, where evidence shows that ordinary worker-level reasoning is insufficient for the analysis or repair. |
-| `worker_xhigh` | Deeper reasoning for unresolved semantic conflicts, competing causal explanations, or cross-module interpretation problems supported by evidence. |
+| `default` | Default for bounded general-purpose and engineering tasks. Resolve unknowns, choose a method, and complete the assignment. Use a matching specialist for retrieval, independent review, or ongoing monitoring. |
+| `worker` | Execute bounded general-purpose and engineering tasks when additional reasoning effort is warranted. May be selected directly; no prior default-agent attempt is required. |
+| `sol_xhigh` | Deeper reasoning for unresolved semantic conflicts, competing causal explanations, or cross-module interpretation problems supported by evidence. |
 | `reviewer` | Independent scrutiny of a specific claim, approach, change, or artifact against requirements, counterexamples, or evidence gaps. Needs a defined review question; does not replace ordinary retrieval or execution. |
 | `monitor` | Continued interpretation of progress, anomalies, and terminal conditions for an existing command, process, or task. A single wait needs no delegation; use collaboration tools to observe other children. |
-| `default` | A clear, bounded task that does not fit a specialist. Use a matching specialist when one exists. |
 
 Missing information, unsuitable scope, role mismatch, and reasoning
 difficulty call for different responses. Diagnose the limitation before
@@ -92,8 +91,8 @@ timeout alone does not justify another status query or message. Use
 `list_agents` for contradictory state, explicit status requests, or
 capacity decisions.
 
-Send progress updates as agreed at handoff and interim messages when the
-parent must act before completion. Keep other progress in the child task.
+Omit process updates that add no useful information for assessing the task.
+Promptly report bugs, blockers, and new findings that affect progress or the result.
 Use available collaboration tools and the identifiers they accept. Report
 delivery from the actual result; delivery does not establish that the
 recipient acted on it.
