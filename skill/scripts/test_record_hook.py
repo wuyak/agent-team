@@ -34,6 +34,64 @@ def write_jsonl(path: Path, events: list[dict]) -> None:
     )
 
 
+def make_test_codex_home(directory: str | Path) -> Path:
+    """Create a self-contained current role installation for hook tests."""
+    home = Path(directory) / "installation with spaces"
+    agents = home / "agents"
+    agents.mkdir(parents=True)
+    (home / "agent-team-policy.toml").write_text(
+        """# Synthetic current policy for recorder tests.
+version = 1
+
+[models."gpt-5.6-luna"]
+alias = "luna"
+service_tier = "standard"
+
+[models."gpt-5.6-sol"]
+alias = "sol"
+service_tier = "standard"
+
+[roles.default]
+filename = "default.toml"
+
+[roles.explorer]
+filename = "explorer.toml"
+
+[roles.monitor]
+filename = "monitor.toml"
+
+[roles.reviewer]
+filename = "reviewer.toml"
+
+[roles.worker]
+filename = "worker.toml"
+
+[roles.sol_xhigh]
+filename = "sol-xhigh.toml"
+""",
+        encoding="utf-8",
+    )
+    profiles = {
+        "default": ("gpt-5.6-luna", "xhigh", "inherit"),
+        # Existing transcript fixtures use medium explorer turns.
+        "explorer": ("gpt-5.6-luna", "medium", "read-only"),
+        "monitor": ("gpt-5.6-luna", "medium", "read-only"),
+        "reviewer": ("gpt-5.6-luna", "high", "read-only"),
+        "worker": ("gpt-5.6-luna", "max", "workspace-write"),
+        "sol_xhigh": ("gpt-5.6-sol", "xhigh", "workspace-write"),
+    }
+    for role, (model, effort, sandbox) in profiles.items():
+        (agents / ({"sol_xhigh": "sol-xhigh.toml"}.get(role, f"{role}.toml"))).write_text(
+            f'name = "{role}"\n'
+            f'model = "{model}"\n'
+            f'model_reasoning_effort = "{effort}"\n'
+            'service_tier = "default"\n'
+            f'sandbox_mode = "{sandbox}"\n',
+            encoding="utf-8",
+        )
+    return home
+
+
 def parent_session_event() -> dict:
     return {
         "timestamp": "2026-08-04T00:59:59Z",
@@ -282,15 +340,31 @@ def forked_child_events(
 
 
 class HookRecorderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._codex_home_tempdir = tempfile.TemporaryDirectory()
+        self.codex_home = make_test_codex_home(self._codex_home_tempdir.name)
+        self.env = os.environ.copy()
+        self.env["CODEX_HOME"] = str(self.codex_home)
+
+    def tearDown(self) -> None:
+        self._codex_home_tempdir.cleanup()
+
     def run_script(
-        self, args: list[str], hook_input: dict | None = None
+        self,
+        args: list[str],
+        hook_input: dict | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        command_env = self.env.copy()
+        if env is not None:
+            command_env.update(env)
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             input=json.dumps(hook_input) if hook_input is not None else None,
             text=True,
             capture_output=True,
             check=False,
+            env=command_env,
         )
 
     def ingest(self, root: Path, payload: dict) -> None:
@@ -548,7 +622,6 @@ class HookRecorderTests(unittest.TestCase):
         self.assertEqual(
             interrupt_metrics["operation_counts"]["interrupt_agent"], 1
         )
-        self.assertEqual(interrupt_metrics["steering_applied"], "not_observed")
 
         interrupt_json_event = RECORD_HOOK.sanitize_tool_event(
             {
@@ -911,7 +984,6 @@ class HookRecorderTests(unittest.TestCase):
                 {"message": 1, "final_answer": 1, "unknown": 1},
             )
             self.assertEqual(metrics["child_handback_observability"], "observed")
-            self.assertEqual(metrics["steering_applied"], "not_observed")
             self.assertEqual(metrics["observability"], "observed")
             first_bytes = record["collector"]["parent_transcript_bytes_processed"]
             second = self.finalize(root)
@@ -1703,7 +1775,7 @@ class HookRecorderTests(unittest.TestCase):
             self.assertEqual(record["project"], "/tmp/hook-project")
             self.assertEqual(record["child_count"], 1)
             self.assertEqual(record["attempt_count"], 1)
-            self.assertIsNone(record["assessment"])
+            self.assertNotIn("assessment", record)
             self.assertEqual(record["collector"]["parent_transcript_bytes_processed"], 0)
             agent = record["agents"][0]
             self.assertEqual(agent["model"], "gpt-5.6-luna")
@@ -1753,6 +1825,59 @@ class HookRecorderTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                env=self.env,
+            )
+            self.assertEqual(audit.returncode, 0, audit.stderr)
+            self.assertTrue(json.loads(audit.stdout)["valid"])
+
+    def test_recorder_help_ingestion_and_audit_work_without_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            no_policy_env = self.env.copy()
+            no_policy_env["CODEX_HOME"] = str(work / "empty-codex-home")
+
+            help_result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=no_policy_env,
+            )
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+
+            root = work / "ingested-records"
+            ingest_result = self.run_script(
+                ["ingest", "--root", str(root)],
+                {
+                    "session_id": PARENT_ID,
+                    "turn_id": TURN_ID,
+                    "cwd": "/tmp/hook-project",
+                    "hook_event_name": "SubagentStart",
+                    "agent_id": CHILD_ID,
+                    "agent_type": "sol_xhigh",
+                    "model": "parent-model-must-not-win",
+                    "permission_mode": "default",
+                },
+                env=no_policy_env,
+            )
+            self.assertEqual(ingest_result.returncode, 0, ingest_result.stderr)
+            self.assertEqual(json.loads(ingest_result.stdout), {})
+
+            audit_root = work / "audit-records"
+            init_result = subprocess.run(
+                [sys.executable, str(AUDITOR), "init", "--root", str(audit_root)],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=no_policy_env,
+            )
+            self.assertEqual(init_result.returncode, 0, init_result.stderr)
+            audit = subprocess.run(
+                [sys.executable, str(AUDITOR), "audit", "--root", str(audit_root)],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=no_policy_env,
             )
             self.assertEqual(audit.returncode, 0, audit.stderr)
             self.assertTrue(json.loads(audit.stdout)["valid"])
@@ -2088,8 +2213,6 @@ class HookRecorderTests(unittest.TestCase):
                 self.assertEqual(agent["tool_outputs"], 1)
                 self.assertEqual(agent["token_usage"]["total_tokens"], 130)
                 self.assertEqual(agent["event_count"], 7)
-                self.assertEqual(record["collector"]["child_metric_boundary_version"], 1)
-                self.assertEqual(record["collector"]["zero_yield_policy_version"], 1)
 
                 with transcript.open("a", encoding="utf-8") as handle:
                     for event in forked_child_events(fork_turns=fork_turns, followup=True)[-4:]:
@@ -2186,11 +2309,22 @@ class HookRecorderTests(unittest.TestCase):
             "model": "gpt-5.6-luna",
             "reasoning_effort": "medium",
             "started_at": "2026-08-12T07:00:00Z",
+            "runtime_resolution": {
+                "expected": {
+                    "model": "gpt-5.6-luna",
+                    "reasoning_effort": "medium",
+                    "service_tier": "standard",
+                    "service_tier_aliases": ["default", "standard"],
+                }
+            },
         }
         self.assertIsNone(
+            RECORD_HOOK.service_tier_mismatch({**base, "service_tier": "standard"})
+        )
+        self.assertIsNotNone(
             RECORD_HOOK.service_tier_mismatch({**base, "service_tier": "fast"})
         )
-        self.assertIsNone(
+        self.assertIsNotNone(
             RECORD_HOOK.service_tier_mismatch({**base, "service_tier": "priority"})
         )
         self.assertIsNone(
@@ -2198,28 +2332,15 @@ class HookRecorderTests(unittest.TestCase):
                 {**base, "service_tier": None, "service_tier_source": "not_observed"}
             )
         )
-        mismatch = RECORD_HOOK.service_tier_mismatch(
-            {**base, "service_tier": "standard"}
-        )
-        self.assertIsNotNone(mismatch)
-        self.assertIsNone(
-            RECORD_HOOK.service_tier_mismatch(
-                {
-                    **base,
-                    "started_at": "2026-08-12T00:00:00Z",
-                    "service_tier": "default",
-                }
-            )
-        )
         types, _ = RECORD_HOOK.automatic_anomaly_types(
-            [], [{**base, "status": "completed", "service_tier": "standard"}], False
+            [], [{**base, "status": "completed", "service_tier": "fast"}], False
         )
         self.assertIn("runtime-capability-mismatch", types)
 
     def test_ordinary_child_lookup_uses_parent_and_uuid_date_without_global_rglob(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            sessions = work / ".codex" / "sessions"
+            sessions = self.codex_home / "sessions"
             compact = CHILD_ID.replace("-", "")
             child_time = RECORD_HOOK.datetime.fromtimestamp(
                 int(compact[:12], 16) / 1000, RECORD_HOOK.timezone.utc
@@ -2230,7 +2351,11 @@ class HookRecorderTests(unittest.TestCase):
             child.write_text("{}\n", encoding="utf-8")
             parent = work / "parent.jsonl"
             parent.write_text("{}\n", encoding="utf-8")
-            with mock.patch.object(RECORD_HOOK.Path, "home", return_value=work), mock.patch.object(
+            with mock.patch.object(
+                RECORD_HOOK.agent_policy,
+                "default_codex_home",
+                return_value=self.codex_home,
+            ), mock.patch.object(
                 RECORD_HOOK.Path,
                 "rglob",
                 side_effect=AssertionError("ordinary lookup must not rglob sessions"),
@@ -2424,7 +2549,6 @@ class HookRecorderTests(unittest.TestCase):
                 Path(first["anomaly"]).read_text(encoding="utf-8")
             )
             self.assertEqual(first_record["agents"][0]["status"], "unknown")
-            self.assertEqual(first_record["collector"]["lifecycle_policy_version"], 1)
             self.assertIn(
                 "child-lifecycle-incomplete", first_anomaly["anomaly_types"]
             )
@@ -2452,6 +2576,7 @@ class HookRecorderTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                env=self.env,
             )
             self.assertEqual(audit.returncode, 0, audit.stderr)
             self.assertTrue(json.loads(audit.stdout)["valid"])
@@ -2862,34 +2987,59 @@ class HookRecorderTests(unittest.TestCase):
             transcript = work / "child.jsonl"
             write_jsonl(
                 transcript,
-                child_events(role="worker_xhigh", model="gpt-5.6-luna", effort="xhigh"),
+                child_events(role="sol_xhigh", model="gpt-5.6-luna", effort="xhigh"),
             )
-            self.pre_spawn(root, role="worker_xhigh")
-            self.post_spawn(root, role="worker_xhigh")
-            self.child_start(root, role="worker_xhigh")
-            self.child_stop(root, transcript, role="worker_xhigh")
+            self.pre_spawn(root, role="sol_xhigh")
+            self.post_spawn(root, role="sol_xhigh")
+            self.child_start(root, role="sol_xhigh")
+            self.child_stop(root, transcript, role="sol_xhigh")
             output = self.finalize(root)
             anomaly = json.loads(Path(output["anomaly"]).read_text(encoding="utf-8"))
             self.assertIn("runtime-capability-mismatch", anomaly["anomaly_types"])
             self.assertIn("gpt-5.6-sol/xhigh", anomaly["evidence"])
 
-    def test_worker_xhigh_legacy_runtime_is_time_bounded(self) -> None:
-        before = {
-            "role": "worker_xhigh",
-            "started_at": "2026-08-03T08:54:21Z",
+    def test_subsequent_current_role_changes_do_not_alter_recorded_expectations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            root = work / "records"
+            transcript = work / "child.jsonl"
+            write_jsonl(transcript, child_events())
+            self.pre_spawn(root)
+            self.post_spawn(root)
+            self.child_start(root)
+
+            profile = self.codex_home / "agents" / "explorer.toml"
+            profile.write_text(
+                'name = "explorer"\n'
+                'model = "gpt-5.6-sol"\n'
+                'model_reasoning_effort = "xhigh"\n'
+                'service_tier = "fast"\n'
+                'sandbox_mode = "workspace-write"\n',
+                encoding="utf-8",
+            )
+            self.child_stop(root, transcript)
+            output = self.finalize(root)
+            record = json.loads(Path(output["routine"]).read_text(encoding="utf-8"))
+            expected = record["agents"][0]["runtime_resolution"]["expected"]
+            self.assertEqual(expected["model"], "gpt-5.6-luna")
+            self.assertEqual(expected["reasoning_effort"], "medium")
+            self.assertEqual(expected["service_tier"], "standard")
+            self.assertEqual(expected["configured_sandbox_mode"], "read-only")
+
+    def test_old_no_snapshot_agent_is_not_reclassified_from_current_settings(self) -> None:
+        agent = {
+            "agent_id": CHILD_ID,
+            "role": "sol_xhigh",
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "max",
+            "service_tier": "standard",
+            "started_at": "2026-08-04T00:00:00Z",
+            "status": "completed",
         }
-        after = {
-            "role": "worker_xhigh",
-            "started_at": "2026-08-03T08:54:23Z",
-        }
-        self.assertIn(
-            ("gpt-5.6-terra", "max"),
-            RECORD_HOOK.expected_role_runtimes(before),
-        )
-        self.assertEqual(
-            RECORD_HOOK.expected_role_runtimes(after),
-            (("gpt-5.6-sol", "xhigh"),),
-        )
+        self.assertIsNone(RECORD_HOOK.expected_role_runtime(agent))
+        self.assertIsNone(RECORD_HOOK.service_tier_mismatch(agent))
+        types, _ = RECORD_HOOK.automatic_anomaly_types([], [agent], False)
+        self.assertNotIn("runtime-capability-mismatch", types)
 
     def test_explicit_requested_runtime_mismatch_is_classified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3021,6 +3171,7 @@ class HookRecorderTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                env=self.env,
             )
             self.assertEqual(audit.returncode, 0, audit.stderr)
             self.assertTrue(json.loads(audit.stdout)["valid"])

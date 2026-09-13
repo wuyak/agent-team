@@ -1,10 +1,5 @@
-# Single source of truth for managed native-agent runtime profiles.
+# Managed role files and current service tiers.
 version = 1
-
-# Distribution template: initialize both histories during installation.
-# See README.md. Scripts require one initial row per model and role.
-service_tier_history = []
-role_runtime_history = []
 
 [models."gpt-5.6-luna"]
 alias = "luna"
@@ -14,38 +9,20 @@ service_tier = "standard"
 alias = "sol"
 service_tier = "standard"
 
-[roles.default]
+[roles."default"]
 filename = "default.toml"
-model = "gpt-5.6-luna"
-reasoning_effort = "xhigh"
-sandbox_mode = "inherit"
 
-[roles.explorer]
+[roles."explorer"]
 filename = "explorer.toml"
-model = "gpt-5.6-luna"
-reasoning_effort = "high"
-sandbox_mode = "read-only"
 
-[roles.monitor]
+[roles."monitor"]
 filename = "monitor.toml"
-model = "gpt-5.6-luna"
-reasoning_effort = "medium"
-sandbox_mode = "read-only"
 
-[roles.reviewer]
+[roles."reviewer"]
 filename = "reviewer.toml"
-model = "gpt-5.6-luna"
-reasoning_effort = "high"
-sandbox_mode = "read-only"
 
-[roles.worker]
+[roles."worker"]
 filename = "worker.toml"
-model = "gpt-5.6-luna"
-reasoning_effort = "max"
-sandbox_mode = "workspace-write"
 
-[roles.sol_xhigh]
+[roles."sol_xhigh"]
 filename = "sol-xhigh.toml"
-model = "gpt-5.6-sol"
-reasoning_effort = "xhigh"
-sandbox_mode = "workspace-write"

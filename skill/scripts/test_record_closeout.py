@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,64 @@ def write_jsonl(path: Path, events: list[dict]) -> None:
         "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
         encoding="utf-8",
     )
+
+
+def make_test_codex_home(directory: str | Path) -> Path:
+    """Create a self-contained current role installation for closeout tests."""
+    home = Path(directory) / "installation with spaces"
+    agents = home / "agents"
+    agents.mkdir(parents=True)
+    (home / "agent-team-policy.toml").write_text(
+        """# Synthetic current policy for recorder tests.
+version = 1
+
+[models."gpt-5.6-luna"]
+alias = "luna"
+service_tier = "standard"
+
+[models."gpt-5.6-sol"]
+alias = "sol"
+service_tier = "standard"
+
+[roles.default]
+filename = "default.toml"
+
+[roles.explorer]
+filename = "explorer.toml"
+
+[roles.monitor]
+filename = "monitor.toml"
+
+[roles.reviewer]
+filename = "reviewer.toml"
+
+[roles.worker]
+filename = "worker.toml"
+
+[roles.sol_xhigh]
+filename = "sol-xhigh.toml"
+""",
+        encoding="utf-8",
+    )
+    profiles = {
+        "default": ("gpt-5.6-luna", "xhigh", "inherit"),
+        # Existing transcript fixtures use medium explorer turns.
+        "explorer": ("gpt-5.6-luna", "medium", "read-only"),
+        "monitor": ("gpt-5.6-luna", "medium", "read-only"),
+        "reviewer": ("gpt-5.6-luna", "high", "read-only"),
+        "worker": ("gpt-5.6-luna", "max", "workspace-write"),
+        "sol_xhigh": ("gpt-5.6-sol", "xhigh", "workspace-write"),
+    }
+    for role, (model, effort, sandbox) in profiles.items():
+        (agents / ({"sol_xhigh": "sol-xhigh.toml"}.get(role, f"{role}.toml"))).write_text(
+            f'name = "{role}"\n'
+            f'model = "{model}"\n'
+            f'model_reasoning_effort = "{effort}"\n'
+            'service_tier = "default"\n'
+            f'sandbox_mode = "{sandbox}"\n',
+            encoding="utf-8",
+        )
+    return home
 
 
 def parent_events(include_success: bool = True) -> list[dict]:
@@ -172,12 +231,22 @@ def child_events(parent_id: str = PARENT_ID) -> list[dict]:
 
 
 class RecordCloseoutTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._codex_home_tempdir = tempfile.TemporaryDirectory()
+        self.codex_home = make_test_codex_home(self._codex_home_tempdir.name)
+        self.env = os.environ.copy()
+        self.env["CODEX_HOME"] = str(self.codex_home)
+
+    def tearDown(self) -> None:
+        self._codex_home_tempdir.cleanup()
+
     def run_script(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             check=False,
             capture_output=True,
             text=True,
+            env=self.env,
         )
 
     def common_args(self, root: Path, parent: Path) -> list[str]:
@@ -195,14 +264,6 @@ class RecordCloseoutTests(unittest.TestCase):
             "catalog-contract-review",
             "--parent-session",
             str(parent),
-            "--role-fit",
-            "clear",
-            "--upgrade",
-            "none",
-            "--team-value",
-            "positive",
-            "--evidence",
-            "Explorer isolated the model catalog mismatch.",
         ]
 
     def test_wait_outcome_classifier_matches_hook_boundaries(self) -> None:
@@ -828,7 +889,11 @@ class RecordCloseoutTests(unittest.TestCase):
             record = json.loads(Path(output["routine"]).read_text(encoding="utf-8"))
             self.assertEqual(record["schema_version"], 3)
             self.assertEqual(record["collection_mode"], "transcript-replay-fallback")
-            self.assertEqual(record["assessment"]["source"], "parent")
+            self.assertNotIn("assessment", record)
+            self.assertNotIn("role_fit", record)
+            self.assertNotIn("upgrade", record)
+            self.assertNotIn("team_value", record)
+            self.assertNotIn("specialist_candidate", record)
             self.assertEqual(record["source"], "correction")
             self.assertEqual(record["supersedes"], ["legacy-record"])
             self.assertEqual(record["project"], "/tmp/example-project")
@@ -839,10 +904,6 @@ class RecordCloseoutTests(unittest.TestCase):
             self.assertEqual(record["role_counts"], {"explorer": 1})
             self.assertEqual(record["coordination_metrics"]["observability"], "legacy")
             self.assertEqual(record["coordination_metrics"]["version"], 4)
-            self.assertEqual(
-                record["coordination_metrics"]["steering_applied"],
-                "not_observed",
-            )
             self.assertEqual(
                 record["coordination_metrics"]["parent_message_observability"],
                 "legacy",
@@ -936,18 +997,8 @@ class RecordCloseoutTests(unittest.TestCase):
                     *self.common_args(root, parent),
                     "--source",
                     "backfill",
-                    "--team-value",
-                    "negative",
                     "--anomaly-type",
                     "dispatch-failure",
-                    "--anomaly-type",
-                    "runtime-capability-mismatch",
-                    "--anomaly-summary",
-                    "The configured role model was unavailable.",
-                    "--anomaly-evidence",
-                    "The native spawn output rejected Luna before returning a child.",
-                    "--anomaly-impact",
-                    "The parent completed the review without the planned child.",
                     "--dry-run",
                 ]
             )
@@ -960,11 +1011,14 @@ class RecordCloseoutTests(unittest.TestCase):
             self.assertFalse(root.exists())
             self.assertEqual(
                 payload["anomaly"]["anomaly_types"],
-                ["dispatch-failure", "runtime-capability-mismatch"],
+                ["dispatch-failure"],
             )
+            self.assertIsNone(payload["anomaly"]["summary"])
+            self.assertIsNone(payload["anomaly"]["evidence"])
+            self.assertIsNone(payload["anomaly"]["impact"])
             self.assertNotIn("SECRET RAW REPLAY DISPATCH ERROR", result.stdout)
 
-    def test_replay_record_marks_zero_yield_child_and_policy_versions(self) -> None:
+    def test_replay_record_marks_zero_yield_child(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
             parent = work / "parent.jsonl"
@@ -993,11 +1047,10 @@ class RecordCloseoutTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload["routine"]["collector"]["child_metric_boundary_version"], 1
-            )
-            self.assertEqual(payload["routine"]["collector"]["zero_yield_policy_version"], 1)
             self.assertEqual(payload["anomaly"]["anomaly_types"], ["zero-yield-child"])
+            self.assertIn(CHILD_ID, payload["anomaly"]["evidence"])
+            self.assertIsNone(payload["anomaly"]["summary"])
+            self.assertIsNone(payload["anomaly"]["impact"])
 
     def test_agent_summary_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1016,13 +1069,13 @@ class RecordCloseoutTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("missing --agent-summary", result.stderr)
 
-    def test_native_role_runtime_mismatch_requires_anomaly(self) -> None:
+    def test_replay_without_snapshot_does_not_infer_current_runtime_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
             parent = work / "parent.jsonl"
             child = work / "child.jsonl"
             events = child_events()
-            events[0]["payload"]["agent_role"] = "worker_xhigh"
+            events[0]["payload"]["agent_role"] = "sol_xhigh"
             events[1]["payload"]["model"] = "gpt-5.6-luna"
             events[1]["payload"]["effort"] = "xhigh"
             write_jsonl(parent, parent_events())
@@ -1037,23 +1090,8 @@ class RecordCloseoutTests(unittest.TestCase):
                     "--dry-run",
                 ]
             )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "runtime mismatch requires --anomaly-type runtime-capability-mismatch",
-                result.stderr,
-            )
-
-    def test_worker_xhigh_legacy_terra_is_accepted_only_before_cutover(self) -> None:
-        legacy = {
-            "agent_id": CHILD_ID,
-            "role": "worker_xhigh",
-            "model": "gpt-5.6-terra",
-            "reasoning_effort": "max",
-            "started_at": "2026-08-03T08:54:21Z",
-        }
-        current = {**legacy, "started_at": "2026-08-03T08:54:23Z"}
-        self.assertEqual(RECORD_CLOSEOUT.runtime_contract_mismatches([legacy]), [])
-        self.assertTrue(RECORD_CLOSEOUT.runtime_contract_mismatches([current]))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNone(json.loads(result.stdout)["anomaly"])
 
     def test_child_parent_mismatch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1097,358 +1135,64 @@ class RecordCloseoutTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("supersedes missing record", result.stderr)
 
-    def test_audit_rejects_unclassified_native_runtime_mismatch(self) -> None:
+    def test_audit_accepts_runtime_problems_without_anomaly_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "records"
+            root = Path(directory)
             routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "mismatch.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "record_id": "mismatch",
-                        "source": "backfill",
-                        "supersedes": [],
-                        "parent_thread_id": PARENT_ID,
-                        "turn_id": TURN_ID,
-                        "child_count": 1,
-                        "attempt_count": 0,
-                        "role_counts": {"worker_xhigh": 1},
-                        "spawn_attempts": [],
-                        "agents": [
-                            {
-                                "agent_id": CHILD_ID,
-                                "role": "worker_xhigh",
-                                "model": "gpt-5.6-luna",
-                                "reasoning_effort": "xhigh",
-                                "started_at": "2026-08-04T00:00:00Z",
-                                "turn_count": 1,
-                            }
-                        ],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            payload = json.loads(result.stdout)
-            self.assertFalse(payload["valid"])
-            self.assertTrue(
-                any(
-                    "unclassified native-role runtime mismatch" in error
-                    for error in payload["errors"]
-                )
-            )
-
-    def test_audit_requires_zero_yield_anomaly_after_policy_cutover(self) -> None:
-        def routine_payload(record_id: str, *, zero_policy: int | None = 1) -> dict:
-            collector = {
-                "lifecycle_policy_version": 1,
-                "child_metric_boundary_version": 1,
-                "parent_transcript_bytes_processed": 0,
-                "child_transcript_bytes_processed": 0,
-                "transcript_strategy": "hook-events-plus-child-byte-cursors",
-                "raw_prompts_stored": False,
-                "raw_messages_stored": False,
-            }
-            if zero_policy is not None:
-                collector["zero_yield_policy_version"] = zero_policy
-            return {
-                "schema_version": 3,
-                "record_id": record_id,
-                "source": "live",
-                "supersedes": [],
-                "project": "/tmp/example-project",
-                "parent_thread_id": PARENT_ID,
-                "turn_id": TURN_ID,
-                "collection_mode": "codex-hooks-incremental",
-                "child_count": 1,
-                "attempt_count": 1,
-                "role_counts": {"explorer": 1},
-                "spawn_attempts": [
-                    {
-                        "call_id": "call-child",
-                        "task_name": "child-task",
-                        "outcome": "started",
-                        "agent_id": CHILD_ID,
-                        "binding": "agent-id",
-                    }
-                ],
-                "agents": [
-                    {
-                        "agent_id": CHILD_ID,
-                        "role": "explorer",
-                        "model": "gpt-5.6-luna",
-                        "reasoning_effort": "medium",
-                        "status": "completed",
-                        "turn_count": 1,
-                        "tool_calls": 0,
-                        "final_message_chars": 0,
-                        "nested_agent_calls": 0,
-                    }
-                ],
-                "collector": collector,
-            }
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "current-records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "current.json").write_text(
-                json.dumps(routine_payload("current")) + "\n", encoding="utf-8"
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(
-                any(
-                    "zero-yield-child anomaly" in error
-                    for error in json.loads(result.stdout)["errors"]
-                )
-            )
-
-            anomalies = root / "anomalies"
-            anomalies.mkdir()
-            (anomalies / "current.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 3,
-                        "record_id": "current",
-                        "related_routine": "current.json",
-                        "anomaly_types": ["zero-yield-child"],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["valid"])
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "legacy-records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "legacy.json").write_text(
-                json.dumps(routine_payload("legacy", zero_policy=None)) + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["valid"])
-
-    def test_audit_validates_child_metric_boundary_marker_shape(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            payload = {
-                "schema_version": 2,
-                "record_id": "bad-marker",
-                "source": "backfill",
-                "supersedes": [],
-                "parent_thread_id": PARENT_ID,
-                "turn_id": TURN_ID,
-                "child_count": 1,
-                "attempt_count": 0,
-                "role_counts": {"explorer": 1},
+            routine.mkdir()
+            record = {
+                "record_id": "observed-problem", "parent_thread_id": PARENT_ID,
+                "turn_id": TURN_ID, "child_count": 1, "attempt_count": 0,
                 "spawn_attempts": [],
-                "agents": [
-                    {
-                        "agent_id": CHILD_ID,
-                        "role": "explorer",
-                        "model": "gpt-5.6-luna",
-                        "reasoning_effort": "medium",
-                        "status": "completed",
-                        "turn_count": 1,
-                        "tool_calls": 1,
-                        "final_message_chars": 4,
-                        "nested_agent_calls": 0,
-                    }
-                ],
-                "collector": {"child_metric_boundary_version": "1"},
+                "agents": [{
+                    "agent_id": CHILD_ID, "model": "observed-model",
+                    "status": "completed", "tool_calls": 0, "final_message_chars": 0,
+                    "runtime_resolution": {"expected": {"model": "expected-model"}},
+                }],
             }
-            (routine / "bad-marker.json").write_text(
-                json.dumps(payload) + "\n", encoding="utf-8"
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(
-                any(
-                    "child_metric_boundary_version marker" in error
-                    for error in json.loads(result.stdout)["errors"]
-                )
-            )
+            (routine / "observed-problem.json").write_text(json.dumps(record))
+            audit = RECORD_CLOSEOUT.audit_records(root)
+            self.assertTrue(audit["valid"], audit["errors"])
+            self.assertEqual(audit["anomaly_count"], 0)
 
-    def test_audit_requires_terminal_binding_uncertainty_anomaly(self) -> None:
-        self.assertEqual(
-            RECORD_CLOSEOUT.binding_uncertainty_messages(
-                [{"outcome": "errored", "agent_id": None}],
-                [{"status": "completed"}],
-            ),
-            [],
-        )
-        self.assertEqual(
-            RECORD_CLOSEOUT.binding_uncertainty_messages(
-                [{"outcome": "started", "agent_id": None, "binding": "unbound"}],
-                [{"status": "unknown"}],
-            ),
-            [],
-        )
+    def test_audit_detects_cycles_that_hide_active_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "binding.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "record_id": "binding",
-                        "source": "backfill",
-                        "supersedes": [],
-                        "parent_thread_id": PARENT_ID,
-                        "turn_id": TURN_ID,
-                        "child_count": 1,
-                        "attempt_count": 1,
-                        "role_counts": {"explorer": 1},
-                        "spawn_attempts": [
-                            {
-                                "call_id": "call-unbound",
-                                "task_name": "unbound-task",
-                                "outcome": "started",
-                                "agent_id": None,
-                                "binding": "ambiguous",
-                                "binding_candidates": [CHILD_ID],
-                            }
-                        ],
-                        "agents": [
-                            {
-                                "agent_id": CHILD_ID,
-                                "role": "explorer",
-                                "model": "gpt-5.6-luna",
-                                "reasoning_effort": "medium",
-                                "status": "completed",
-                                "turn_count": 1,
-                                "nested_agent_calls": 0,
-                            }
-                        ],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            payload = json.loads(result.stdout)
-            self.assertFalse(payload["valid"])
-            self.assertTrue(
-                any(
-                    "agent-binding-uncertainty anomaly" in error
-                    for error in payload["errors"]
-                )
-            )
+            root = Path(directory)
+            (root / "routine").mkdir()
+            for record_id, previous in (("first", "second"), ("second", "first")):
+                (root / "routine" / f"{record_id}.json").write_text(json.dumps({
+                    "record_id": record_id, "supersedes": [previous],
+                    "parent_thread_id": PARENT_ID, "turn_id": TURN_ID,
+                }))
+            audit = RECORD_CLOSEOUT.audit_records(root)
+            self.assertFalse(audit["valid"])
+            self.assertIn("supersedes cycle:", "\n".join(audit["errors"]))
 
-            anomalies = root / "anomalies"
-            anomalies.mkdir()
-            (anomalies / "binding.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "record_id": "binding",
-                        "related_routine": "binding.json",
-                        "anomaly_types": ["agent-binding-uncertainty"],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["valid"])
-
-    def test_audit_requires_lifecycle_anomaly_only_after_policy_cutover(self) -> None:
-        def routine_payload(record_id: str, *, policy: bool) -> dict:
-            payload = {
-                "schema_version": 2,
-                "record_id": record_id,
-                "source": "backfill",
-                "supersedes": [],
-                "parent_thread_id": PARENT_ID,
-                "turn_id": TURN_ID,
-                "child_count": 1,
-                "attempt_count": 1,
-                "role_counts": {"explorer": 1},
-                "spawn_attempts": [
-                    {
-                        "call_id": "call-child",
-                        "task_name": "child-task",
-                        "outcome": "started",
-                        "agent_id": CHILD_ID,
-                        "binding": "agent-id",
-                    }
-                ],
-                "agents": [
-                    {
-                        "agent_id": CHILD_ID,
-                        "role": "explorer",
-                        "model": "gpt-5.6-luna",
-                        "reasoning_effort": "medium",
-                        "status": "unknown",
-                        "turn_count": 1,
-                        "nested_agent_calls": 0,
-                    }
-                ],
-            }
-            if policy:
-                payload["collector"] = {"lifecycle_policy_version": 1}
-            return payload
-
+    def test_audit_detects_broken_references_duplicate_turns_and_counts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "legacy-records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "legacy.json").write_text(
-                json.dumps(routine_payload("legacy", policy=False)) + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["valid"])
+            root = Path(directory)
+            (root / "routine").mkdir()
+            (root / "anomalies").mkdir()
+            base = {"parent_thread_id": PARENT_ID, "turn_id": TURN_ID,
+                    "agents": [], "spawn_attempts": [], "child_count": 0}
+            for record_id in ("first", "second"):
+                record = {**base, "record_id": record_id}
+                if record_id == "second":
+                    record.update(supersedes=["missing"], child_count=1)
+                (root / "routine" / f"{record_id}.json").write_text(json.dumps(record))
+            (root / "anomalies" / "orphan.json").write_text(json.dumps({
+                "record_id": "orphan", "related_routine": "absent.json",
+            }))
+            audit = RECORD_CLOSEOUT.audit_records(root)
+            self.assertFalse(audit["valid"])
+            errors = "\n".join(audit["errors"])
+            for message in ("supersedes missing", "active duplicate turn",
+                            "child_count", "references missing routine"):
+                self.assertIn(message, errors)
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "current-records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "current.json").write_text(
-                json.dumps(routine_payload("current", policy=True)) + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(
-                any(
-                    "child-lifecycle-incomplete anomaly" in error
-                    for error in json.loads(result.stdout)["errors"]
-                )
-            )
 
-            anomalies = root / "anomalies"
-            anomalies.mkdir()
-            (anomalies / "current.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "record_id": "current",
-                        "related_routine": "current.json",
-                        "anomaly_types": ["child-lifecycle-incomplete"],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["valid"])
+
+
 
     def test_coverage_reconcile_ignores_root_sessions_and_tracks_unmatched_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1721,7 +1465,7 @@ class RecordCloseoutTests(unittest.TestCase):
                 payload["anomaly"]["anomaly_types"], ["child-delivery-failure"]
             )
 
-    def test_replay_role_sources_match_hook_enums_and_tier_aliases(self) -> None:
+    def test_replay_role_sources_match_hook_enums(self) -> None:
         agent = {
             "agent_id": CHILD_ID,
             "role": None,
@@ -1744,26 +1488,6 @@ class RecordCloseoutTests(unittest.TestCase):
         self.assertEqual(agent["requested_role_source"], "spawn-request")
         self.assertEqual(agent["role_binding_source"], "not_observed")
         self.assertIsNone(agent["actual_role"])
-        self.assertIsNone(
-            RECORD_CLOSEOUT.service_tier_mismatch(
-                {
-                    **agent,
-                    "actual_role": "explorer",
-                    "service_tier": "priority",
-                    "started_at": "2026-08-12T07:00:00Z",
-                }
-            )
-        )
-        self.assertIsNotNone(
-            RECORD_CLOSEOUT.service_tier_mismatch(
-                {
-                    **agent,
-                    "actual_role": "worker_xhigh",
-                    "service_tier": "fast",
-                    "started_at": "2026-08-04T00:00:00Z",
-                }
-            )
-        )
         mixed = {
             "agent_id": CHILD_ID,
             "agent_path": "/root/mixed",
@@ -1790,56 +1514,6 @@ class RecordCloseoutTests(unittest.TestCase):
         )
         self.assertEqual(mixed["requested_role_source"], "spawn-request")
 
-    def test_audit_requires_anomaly_for_observed_service_tier_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "records"
-            routine = root / "routine"
-            routine.mkdir(parents=True)
-            (routine / "tier-mismatch.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "record_id": "tier-mismatch",
-                        "source": "backfill",
-                        "supersedes": [],
-                        "parent_thread_id": PARENT_ID,
-                        "turn_id": TURN_ID,
-                        "child_count": 1,
-                        "attempt_count": 1,
-                        "role_counts": {"explorer": 1},
-                        "spawn_attempts": [
-                            {
-                                "outcome": "started",
-                                "agent_id": CHILD_ID,
-                                "binding": "agent-id",
-                            }
-                        ],
-                        "agents": [
-                            {
-                                "agent_id": CHILD_ID,
-                                "role": "explorer",
-                                "actual_role": "explorer",
-                                "model": "gpt-5.6-luna",
-                                "reasoning_effort": "medium",
-                                "service_tier": "standard",
-                                "started_at": "2026-08-12T07:00:00Z",
-                                "turn_count": 1,
-                                "status": "completed",
-                                "nested_agent_calls": 0,
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            result = self.run_script(["audit", "--root", str(root)])
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(
-                any(
-                    "unclassified native-role runtime mismatch" in error
-                    for error in json.loads(result.stdout)["errors"]
-                )
-            )
 
     def test_coverage_reconcile_keeps_explicit_child_header_invalid_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

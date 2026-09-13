@@ -22,14 +22,17 @@ when delegation runs. Follow the user's selected installation or update scope.
 
 The scripts require Python 3.11 or newer. Recording uses POSIX `fcntl`; native Windows setup
 requires adapting paths, shell commands, and locking to the receiving environment and validating
-that behavior. See [field-recording.md](field-recording.md) for optional recording Hooks.
+that behavior. See [field-recording.md](field-recording.md) for optional recording Hooks and
+record-root rules.
 
 ## Role and permission settings
 
-Each role TOML supplies its name, selection description, behavior instructions, and configured
-model settings. Keep role names, filenames, model selectors, reasoning efforts, policy entries,
-and global subagent defaults consistent. Check support in the actual client and account;
-configuration alone does not establish model availability.
+Each role TOML supplies its name, selection description, behavior instructions, and actual model,
+reasoning effort, and sandbox settings. The policy's `roles` table maps each role to its TOML
+filename; its `models` table supplies model aliases and the current desired service tier. Read
+the model, reasoning effort, and sandbox mode from the role TOML. Keep role names and filename
+mappings consistent. Check support in the actual client and account; configuration alone does not
+establish model availability.
 
 Role `sandbox_mode` is a default, not a guaranteed hard permission boundary: live parent
 permissions may override it. For enforced read-only work, the parent must itself be restrictive.
@@ -37,25 +40,6 @@ Verify effective permissions rather than inferring isolation from a role declara
 
 Choose `fork_turns` in the spawn call, not in role TOMLs. Use the main Skill's context rules.
 For a new recurring specialist, read [professional-agents.md](professional-agents.md).
-
-## Initialize policy history
-
-For a policy template with empty histories, select the receiving installation's models and roles,
-then initialize the installed policy before using the policy scripts:
-
-- One `service_tier_history` entry per model: `effective_at`, `model`, `service_tier`.
-- One `role_runtime_history` entry per role: `effective_at`, `role`, `model`, `reasoning_effort`.
-
-Use the actual configuration effective time in timezone-aware ISO 8601 format and values from
-the final settings. Remove the corresponding empty array declarations when adding table entries.
-Preserve existing local history and append actual changes. These histories are required by the
-policy scripts even when recording Hooks are disabled; an uninitialized template fails validation.
-
-When retiring or renaming a role, remove its old profile and current `roles` entry. Preserve its
-original runtime history and add `retired_roles.<old-name>` with `retired_at` and its last
-`sandbox_mode`. Historical lookups use that name only for starts before retirement; it does not
-remain a selectable role. A renamed role gets its own current entry and initial history row.
-For a strength change under the same name, append a runtime row at the actual change time.
 
 ## Change service tiers
 
@@ -68,27 +52,20 @@ From the installed Skill directory, run:
 
 ```bash
 python3 scripts/agent_speed.py set <model> <fast|standard>
-python3 scripts/agent_speed.py validate
 ```
 
 The CLI and policy use `standard` for the user's normal/default tier; role TOMLs use `default`.
-Fast requires client and account support. Report the model family changed and validation result.
+Fast requires client and account support. Report the model family changed and resulting profile status.
 
-## Validate changes
+## Inspect settings
 
-- After tier changes, run `agent_speed.py validate` to check policy history, profile tiers,
-  and Fast settings.
-- After profile, policy, or recording Hook configuration changes, run
-  `python3 scripts/validate_agent_team.py`. It checks role fields against the policy and history,
-  plus recording commands and event matchers when configured. Other Hooks may coexist.
-  Use `--codex-home <path>` to inspect another installation. The check is read-only; it does
-  not evaluate prompt wording, require a custom model catalog, or prove runtime capabilities.
-  After changing the validator, run `python3 scripts/test_validate_agent_team.py`.
-- After Skill changes, run the installed system skill-creator's `quick_validate.py` against
-  the changed Skill directory when available, and check its relative references.
-- After client upgrades, verify the configuration and Hook events actually supported.
+Inspect the current service tiers and role files from the installed Skill directory:
 
-Static checks do not prove safe dispatch, model availability, or effective runtime permissions.
-Recording remains optional and passive. Read [field-recording.md](field-recording.md) for recorder
-maintenance or historical audits; correct records through explicit superseding records rather
-than rewriting routine history.
+```bash
+python3 scripts/agent_speed.py status
+python3 scripts/validate_agent_team.py
+```
+
+Use `--codex-home <path>` with `validate_agent_team.py` to inspect another installation. These
+commands are read-only. Read [field-recording.md](field-recording.md) for recorder maintenance,
+diagnostics, and historical audits.

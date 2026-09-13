@@ -109,18 +109,11 @@ class ReadThreadOnceTests(unittest.TestCase):
             check=False,
         )
 
-    def test_doctor_uses_one_short_lived_app_server(self) -> None:
-        result = self.run_reader("doctor")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["provider"], "codex-app-server-stdio")
-        self.assertEqual(payload["operation"], "initialize")
-        self.assertEqual(payload["result"]["status"], "ok")
-
     def test_metadata_excludes_turns_from_thread_read(self) -> None:
         result = self.run_reader("metadata", "--thread-id", THREAD_ID)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
+        self.assertEqual(payload["provider"], "codex-app-server-stdio")
         self.assertEqual(payload["operation"], "thread/read")
         self.assertEqual(payload["result"]["thread"]["id"], THREAD_ID)
 
@@ -161,19 +154,6 @@ class ReadThreadOnceTests(unittest.TestCase):
         self.assertEqual(echoed["limit"], 3)
         self.assertEqual(echoed["sortDirection"], "asc")
         self.assertEqual(echoed["itemsView"], "summary")
-
-    def test_rejects_invalid_thread_id_before_protocol_use(self) -> None:
-        result = self.run_reader("metadata", "--thread-id", "not-a-thread")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("invalid Codex thread id", result.stderr)
-
-    def test_normalizes_uuid_spellings_before_protocol_use(self) -> None:
-        result = self.run_reader(
-            "metadata", "--thread-id", "{" + THREAD_ID.upper() + "}"
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["result"]["thread"]["id"], THREAD_ID)
 
     def test_limit_is_bounded(self) -> None:
         result = self.run_reader("turns", "--thread-id", THREAD_ID, "--limit", "1000")

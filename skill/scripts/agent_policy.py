@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared runtime policy for managed native Codex agents."""
+"""Current service-tier policy and installed role profiles."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import copy
 import json
 import os
 import tomllib
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +18,10 @@ TIER_ALIASES = {
     "standard": {"default", "standard"},
 }
 PROFILE_TIER_VALUES = {"fast": "fast", "standard": "default"}
-VALID_SANDBOXES = {"inherit", "read-only", "workspace-write"}
 
 
 class PolicyError(ValueError):
-    """Raised when the managed-agent policy is absent or incoherent."""
+    """The managed configuration cannot be read or used."""
 
 
 def default_codex_home() -> Path:
@@ -34,16 +32,12 @@ def policy_path(codex_home: Path | None = None) -> Path:
     return (codex_home or default_codex_home()) / POLICY_FILENAME
 
 
-def parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
+def read_toml(path: Path) -> dict[str, Any]:
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise PolicyError(f"cannot load {path}: {error}") from error
 
 
 def canonical_tier(value: Any) -> str:
@@ -71,157 +65,52 @@ def _require_mapping(value: Any, field: str) -> dict[str, Any]:
     return value
 
 
-def _history_rows(policy: dict[str, Any], field: str) -> list[dict[str, Any]]:
-    rows = policy.get(field)
-    if not isinstance(rows, list) or not rows:
-        raise PolicyError(f"{field} must be a non-empty array of tables")
-    if not all(isinstance(row, dict) for row in rows):
-        raise PolicyError(f"{field} contains a non-table entry")
-    return rows
-
-
-def _history_for(
-    policy: dict[str, Any], field: str, key: str, value: str
-) -> list[dict[str, Any]]:
-    """Return history entries belonging to one model or role."""
-    return [row for row in policy[field] if row[key] == value]
-
-
-def _retired_roles(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return optional retirement metadata, validating its small schema."""
-    retired = policy.get("retired_roles", {})
-    if not isinstance(retired, dict):
-        raise PolicyError("retired_roles must be a table")
-    for role, metadata in retired.items():
-        if not isinstance(role, str) or not role:
-            raise PolicyError("retired role names must be non-empty strings")
-        metadata = _require_mapping(metadata, f"retired_roles.{role}")
-        if parse_timestamp(metadata.get("retired_at")) is None:
-            raise PolicyError(f"retired_roles.{role}.retired_at must be ISO-8601")
-        if metadata.get("sandbox_mode") not in VALID_SANDBOXES:
-            raise PolicyError(f"retired_roles.{role}.sandbox_mode is invalid")
-    return retired
-
-
-def _latest_at_or_before(
-    rows: list[dict[str, Any]], started: datetime
-) -> dict[str, Any] | None:
-    """Return the latest history entry effective at ``started``."""
-    selected = [
-        row for row in rows if parse_timestamp(row["effective_at"]) <= started
-    ]
-    return selected[-1] if selected else None
-
-
 def validate_policy(policy: dict[str, Any]) -> None:
     if policy.get("version") != 1:
         raise PolicyError("policy version must be 1")
-
-    models = _require_mapping(policy.get("models"), "models")
-    aliases: dict[str, str] = {}
-    for model, spec in models.items():
-        if not isinstance(model, str) or not model:
-            raise PolicyError("model names must be non-empty strings")
+    aliases: set[str] = set()
+    for model, spec in _require_mapping(policy.get("models"), "models").items():
         spec = _require_mapping(spec, f"models.{model}")
         alias = spec.get("alias")
-        if not isinstance(alias, str) or not alias.strip():
-            raise PolicyError(f"models.{model}.alias must be non-empty")
+        if not model or not isinstance(alias, str) or not alias.strip():
+            raise PolicyError(f"models.{model}: model and alias must be non-empty")
         alias = alias.strip().lower()
         if alias in aliases:
-            raise PolicyError(f"duplicate model alias {alias}: {aliases[alias]}, {model}")
-        aliases[alias] = model
+            raise PolicyError(f"duplicate model alias: {alias}")
+        aliases.add(alias)
         canonical_tier(spec.get("service_tier"))
-
-    roles = _require_mapping(policy.get("roles"), "roles")
     filenames: set[str] = set()
-    for role, spec in roles.items():
+    for role, spec in _require_mapping(policy.get("roles"), "roles").items():
         spec = _require_mapping(spec, f"roles.{role}")
         filename = spec.get("filename")
-        if (
-            not isinstance(filename, str)
-            or not filename.endswith(".toml")
-            or Path(filename).name != filename
-        ):
+        if (not role or not isinstance(filename, str)
+                or not filename.endswith(".toml") or Path(filename).name != filename):
             raise PolicyError(f"roles.{role}.filename must be one TOML basename")
         if filename in filenames:
             raise PolicyError(f"duplicate role filename: {filename}")
         filenames.add(filename)
-        if spec.get("model") not in models:
-            raise PolicyError(f"roles.{role}.model is not a managed current model")
-        effort = spec.get("reasoning_effort")
-        if not isinstance(effort, str) or not effort:
-            raise PolicyError(f"roles.{role}.reasoning_effort must be non-empty")
-        if spec.get("sandbox_mode") not in VALID_SANDBOXES:
-            raise PolicyError(f"roles.{role}.sandbox_mode is invalid")
-
-    retired_roles = _retired_roles(policy)
-    overlapping_roles = set(roles).intersection(retired_roles)
-    if overlapping_roles:
-        role = sorted(overlapping_roles)[0]
-        raise PolicyError(f"role is both current and retired: {role}")
-
-    service_rows = _history_rows(policy, "service_tier_history")
-    service_seen: dict[str, datetime] = {}
-    latest_service: dict[str, str] = {}
-    for row in service_rows:
-        model = row.get("model")
-        if not isinstance(model, str) or not model:
-            raise PolicyError("service_tier_history.model must be non-empty")
-        effective = parse_timestamp(row.get("effective_at"))
-        if effective is None:
-            raise PolicyError("service_tier_history.effective_at must be ISO-8601")
-        if model in service_seen and effective <= service_seen[model]:
-            raise PolicyError(f"service tier history for {model} is not strictly ordered")
-        service_seen[model] = effective
-        latest_service[model] = canonical_tier(row.get("service_tier"))
-    for model, spec in models.items():
-        if latest_service.get(model) != canonical_tier(spec.get("service_tier")):
-            raise PolicyError(f"current service tier for {model} disagrees with history")
-
-    runtime_rows = _history_rows(policy, "role_runtime_history")
-    runtime_seen: dict[str, datetime] = {}
-    latest_runtime: dict[str, tuple[str, str]] = {}
-    for row in runtime_rows:
-        role = row.get("role")
-        if role not in roles and role not in retired_roles:
-            raise PolicyError(f"role_runtime_history has unknown role: {role}")
-        effective = parse_timestamp(row.get("effective_at"))
-        if effective is None:
-            raise PolicyError("role_runtime_history.effective_at must be ISO-8601")
-        if role in runtime_seen and effective <= runtime_seen[role]:
-            raise PolicyError(f"runtime history for {role} is not strictly ordered")
-        runtime_seen[role] = effective
-        model = row.get("model")
-        effort = row.get("reasoning_effort")
-        if not isinstance(model, str) or not model or not isinstance(effort, str) or not effort:
-            raise PolicyError(f"runtime history for {role} is incomplete")
-        latest_runtime[role] = (model, effort)
-        if role in retired_roles:
-            retired_at = parse_timestamp(retired_roles[role]["retired_at"])
-            if retired_at is None or effective >= retired_at:
-                raise PolicyError(
-                    f"runtime history for retired role {role} is at or after retirement"
-                )
-    for role, spec in roles.items():
-        current = (spec["model"], spec["reasoning_effort"])
-        if latest_runtime.get(role) != current:
-            raise PolicyError(f"current runtime for {role} disagrees with history")
-    for role in retired_roles:
-        if role not in runtime_seen:
-            raise PolicyError(f"retired role {role} has no runtime history")
 
 
 def load_policy(
     codex_home: Path | None = None, *, explicit_path: Path | None = None
 ) -> dict[str, Any]:
-    path = explicit_path or policy_path(codex_home)
-    try:
-        with path.open("rb") as handle:
-            policy = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        raise PolicyError(f"cannot load agent policy {path}: {error}") from error
+    policy = read_toml(explicit_path or policy_path(codex_home))
     validate_policy(policy)
     return policy
+
+
+def load_profiles(policy: dict[str, Any], codex_home: Path) -> dict[str, dict[str, Any]]:
+    profiles = {}
+    for role, spec in policy["roles"].items():
+        path = codex_home / "agents" / spec["filename"]
+        profile = read_toml(path)
+        if profile.get("name") != role:
+            raise PolicyError(f"{path}: expected role name {role!r}")
+        model = profile.get("model")
+        if not isinstance(model, str) or model not in policy["models"]:
+            raise PolicyError(f"{path}: model is not in the managed tier policy")
+        profiles[role] = profile
+    return profiles
 
 
 def resolve_model(policy: dict[str, Any], target: str) -> str:
@@ -232,200 +121,30 @@ def resolve_model(policy: dict[str, Any], target: str) -> str:
     raise PolicyError(f"unknown managed model or alias: {target}")
 
 
-def profile_expectations(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    expectations: dict[str, dict[str, Any]] = {}
-    for role, spec in policy["roles"].items():
-        tier = canonical_tier(policy["models"][spec["model"]]["service_tier"])
-        expectations[role] = {
-            "filename": spec["filename"],
-            "model": spec["model"],
-            "reasoning_effort": spec["reasoning_effort"],
-            "service_tier": profile_tier_value(tier),
-            "sandbox_mode": None
-            if spec["sandbox_mode"] == "inherit"
-            else spec["sandbox_mode"],
-        }
-    return expectations
-
-
 def policy_requires_fast_mode(policy: dict[str, Any]) -> bool:
-    return any(
-        canonical_tier(spec["service_tier"]) == "fast"
-        for spec in policy["models"].values()
-    )
-
-
-def expected_role_runtimes(
-    policy: dict[str, Any], role: str, started_at: Any
-) -> tuple[tuple[str, str], ...] | None:
-    if role not in policy["roles"] and role not in policy.get("retired_roles", {}):
-        return None
-    rows = _history_for(policy, "role_runtime_history", "role", role)
-    started = parse_timestamp(started_at)
-    if started is None:
-        # A retired role has no current default. Without a timestamp there is
-        # no safe way to decide whether any historical row applies.
-        if role not in policy["roles"]:
-            return None
-        values: list[tuple[str, str]] = []
-        for row in rows:
-            pair = (row["model"], row["reasoning_effort"])
-            if pair not in values:
-                values.append(pair)
-        return tuple(values)
-    retirement = policy.get("retired_roles", {}).get(role)
-    if retirement is not None:
-        retired_at = parse_timestamp(retirement["retired_at"])
-        if retired_at is None or started >= retired_at:
-            return None
-    row = _latest_at_or_before(rows, started)
-    if row is None:
-        return None
-    return ((row["model"], row["reasoning_effort"]),)
-
-
-def expected_service_tier_aliases(
-    policy: dict[str, Any], role: str, started_at: Any
-) -> set[str] | None:
-    runtimes = expected_role_runtimes(policy, role, started_at)
-    if not runtimes:
-        return None
-    started = parse_timestamp(started_at)
-    aliases: set[str] = set()
-    for model, _effort in runtimes:
-        rows = _history_for(policy, "service_tier_history", "model", model)
-        if started is None:
-            for row in rows:
-                aliases.update(tier_aliases(row["service_tier"]))
-            continue
-        row = _latest_at_or_before(rows, started)
-        if row is not None:
-            aliases.update(tier_aliases(row["service_tier"]))
-    return aliases or None
-
-
-def runtime_expectation(
-    policy: dict[str, Any], role: str | None, started_at: Any
-) -> dict[str, Any] | None:
-    """Resolve one time-bounded managed-role expectation for durable records.
-
-    The observed runtime can legitimately omit a service tier.  This helper
-    keeps that absence separate from the controller expectation by returning
-    the exact policy row that applied when the child started.
-    """
-    if not isinstance(role, str):
-        return None
-    started = parse_timestamp(started_at)
-    if started is None:
-        return None
-
-    roles = policy["roles"]
-    retired_roles = policy.get("retired_roles", {})
-    if role not in roles and role not in retired_roles:
-        return None
-    retirement = retired_roles.get(role)
-    if retirement is not None:
-        retired_at = parse_timestamp(retirement["retired_at"])
-        if retired_at is None or started >= retired_at:
-            return None
-
-    runtime_rows = _history_for(policy, "role_runtime_history", "role", role)
-    runtime_row = _latest_at_or_before(runtime_rows, started)
-    if runtime_row is None:
-        return None
-    model = runtime_row["model"]
-
-    tier_rows = _history_for(policy, "service_tier_history", "model", model)
-    tier_row = _latest_at_or_before(tier_rows, started)
-    if tier_row is None:
-        return None
-    configured_sandbox = (
-        roles[role]["sandbox_mode"]
-        if role in roles
-        else retired_roles[role]["sandbox_mode"]
-    )
-    return {
-        "policy_version": policy["version"],
-        "role": role,
-        "model": model,
-        "reasoning_effort": runtime_row["reasoning_effort"],
-        "service_tier": canonical_tier(tier_row["service_tier"]),
-        "service_tier_aliases": sorted(tier_aliases(tier_row["service_tier"])),
-        "configured_sandbox_mode": configured_sandbox,
-        "runtime_effective_at": runtime_row["effective_at"],
-        "service_tier_effective_at": tier_row["effective_at"],
-        "source": "agent-team-policy-history",
-    }
+    return any(canonical_tier(spec["service_tier"]) == "fast"
+               for spec in policy["models"].values())
 
 
 def update_model_tier(
-    policy: dict[str, Any], target: str, tier: str, effective_at: str
+    policy: dict[str, Any], target: str, tier: str
 ) -> tuple[dict[str, Any], str, bool]:
     validate_policy(policy)
     model = resolve_model(policy, target)
     normalized = canonical_tier(tier)
-    current = canonical_tier(policy["models"][model]["service_tier"])
-    if current == normalized:
-        return copy.deepcopy(policy), model, False
-    if parse_timestamp(effective_at) is None:
-        raise PolicyError("effective_at must be an ISO-8601 timestamp")
     updated = copy.deepcopy(policy)
+    changed = canonical_tier(policy["models"][model]["service_tier"]) != normalized
     updated["models"][model]["service_tier"] = normalized
-    updated["service_tier_history"].append(
-        {
-            "effective_at": effective_at,
-            "model": model,
-            "service_tier": normalized,
-        }
-    )
-    validate_policy(updated)
-    return updated, model, True
-
-
-def _quoted(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
+    return updated, model, changed
 
 
 def render_policy(policy: dict[str, Any]) -> str:
     validate_policy(policy)
-    lines = [
-        "# Single source of truth for managed native-agent runtime profiles.",
-        f"version = {policy['version']}",
-        "",
-    ]
+    quoted = lambda value: json.dumps(value, ensure_ascii=False)
+    lines = ["# Managed role files and current service tiers.", f"version = {policy['version']}", ""]
     for model, spec in policy["models"].items():
-        lines.extend(
-            [
-                f"[models.{_quoted(model)}]",
-                f"alias = {_quoted(spec['alias'])}",
-                f"service_tier = {_quoted(canonical_tier(spec['service_tier']))}",
-                "",
-            ]
-        )
+        lines.extend([f"[models.{quoted(model)}]", f"alias = {quoted(spec['alias'])}",
+                      f"service_tier = {quoted(canonical_tier(spec['service_tier']))}", ""])
     for role, spec in policy["roles"].items():
-        lines.extend(
-            [
-                f"[roles.{role}]",
-                f"filename = {_quoted(spec['filename'])}",
-                f"model = {_quoted(spec['model'])}",
-                f"reasoning_effort = {_quoted(spec['reasoning_effort'])}",
-                f"sandbox_mode = {_quoted(spec['sandbox_mode'])}",
-                "",
-            ]
-        )
-    for role, metadata in policy.get("retired_roles", {}).items():
-        lines.extend(
-            [
-                f"[retired_roles.{_quoted(role)}]",
-                f"retired_at = {_quoted(metadata['retired_at'])}",
-                f"sandbox_mode = {_quoted(metadata['sandbox_mode'])}",
-                "",
-            ]
-        )
-    for field in ("service_tier_history", "role_runtime_history"):
-        for row in policy[field]:
-            lines.append(f"[[{field}]]")
-            for key, value in row.items():
-                lines.append(f"{key} = {_quoted(value)}")
-            lines.append("")
+        lines.extend([f"[roles.{quoted(role)}]", f"filename = {quoted(spec['filename'])}", ""])
     return "\n".join(lines).rstrip() + "\n"

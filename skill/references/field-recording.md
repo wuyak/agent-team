@@ -11,7 +11,7 @@ complete child JSONL into memory.
 - Storage and identity
 - Incremental collection
 - Runtime cost model
-- Closeout and assessment
+- Closeout
 - Schema v3
 - Fallback, corrections, and backfills
 - Privacy
@@ -85,16 +85,8 @@ historical replay.
 `coordination_metrics` is explicit about evidence.  Its operation counts are observed when the
 parent suffix was scanned (or are marked `unknown`/`legacy` when no parent path or only replay
 evidence exists).  `max_consecutive_timeout_without_agent_update` advances only across explicit
-timeout results without a native `sub_agent_activity` event.  `commitment`, `ready_transition`,
-`steering_applied`, and `native_live_status` remain `not_observed` unless a native event names the
-transition.  A `PostToolUse` result with `status=completed` records a completed tool call; it is
-never promoted to an applied-steering acknowledgement.
-
-The coordination classifier version is stored with the parent cursor.  If the classifier changes,
-the collector discards only the stale coordination cache and re-scans the already-captured
-`start_offset`→cursor suffix; lifecycle counters and bindings are not replayed, and no full history
-walk is introduced.  A dry-run performs that same bounded computation entirely in memory and does
-not update cursors, child cursors, bindings, locks, or finalized pointers.
+timeout results without a native `sub_agent_activity` event.  A `PostToolUse` result with
+`status=completed` records a completed tool call.
 
 The same bounded suffix pass may count privacy-safe parent assistant messages only when the stable
 identity schema is present: `response_item` with `payload.type=message`, `role=assistant`, and
@@ -155,6 +147,20 @@ one file per conversation. Preserve every child instance in `agents` and multipl
 Each record identifies the project, parent thread, parent turn, abstract task signature, source,
 and collection mode. Never infer project identity from the recorder process working directory;
 Agent tool hooks and lifecycle hooks supply the native session `cwd`.
+
+Both recording scripts default to `~/.codex/agent-team-records/` in the Hook process user's
+home directory. The supplied Hook commands use this default. The recorder maintains `routine/`,
+`anomalies/`, and `hook-state/` there.
+
+| Setting or argument | Path it selects |
+| --- | --- |
+| `CODEX_HOME` | Skill installation, policy, and role files; source-session lookup defaults to `<codex-home>/sessions`. It does not change the record directory. |
+| Recording command `--root <path>` | Record and Hook-state directory for that invocation. It does not move existing data or change source-session paths. |
+| `record_closeout.py reconcile --sessions-root <path>` | Source-session tree for coverage reconciliation. Replay `record` uses explicit `--parent-session` and `--agent-session` file paths. |
+
+Use an alternate record root for isolated maintenance or tests. The manual-finalize write
+restriction applies to the default record directory; an alternate root does not inherit that
+restriction. Existing records stay in their original directory.
 
 ## Incremental Collection
 
@@ -223,7 +229,7 @@ The number of historical records does not affect ordinary closeout. Only the exp
 walks the record library, so its cost grows with record count and belongs to maintenance rather
 than every task.
 
-## Closeout and Assessment
+## Closeout
 
 The ordinary closeout path is automatic. A global `Stop` hook invokes `record_hook.py
 auto-finalize`; it writes a record only when the exact parent thread and turn already have a native
@@ -241,24 +247,6 @@ native coordination to confirm that every child is `completed`, `errored`, `inte
 otherwise been explicitly reclaimed. A nonterminal child does not block writing an immutable
 hook journal, but it does block the formal snapshot until terminal evidence arrives. Finalization is
 deterministic and requires no model-authored summary.
-
-Semantic assessment is optional and preview-only on the production root. Add it only when it
-provides real decision value:
-
-    python3 scripts/record_hook.py finalize \
-      --parent-thread-id <parent-thread-id> \
-      --turn-id <turn-id> \
-      --task-signature <abstract-signature> \
-      --agent-summary '<child-id>=Concise decision delta.' \
-      --role-fit clear \
-      --upgrade none \
-      --team-value positive \
-      --evidence 'Accepted bounded evidence from the child.' \
-      --dry-run
-
-If one semantic assessment field is supplied, all four required fields must be supplied. Do not
-launch an evaluator, ask children to grade themselves, or run extra searches or tests only for
-recording.
 
 ## Schema v3 (Historical)
 
@@ -284,52 +272,40 @@ Hook-generated schema-v3 records contain:
   metadata stays unknown. A proven contradiction is recorded as the bounded
   `fork-request-observation-mismatch` anomaly. This telemetry does not change the child metric
   boundary or historical records that lack these optional fields;
-- optional parent assessment, otherwise `assessment=null`;
 - `coordination_metrics` with allowlisted operation counts, wait outcome buckets, bounded wait
-  totals, timeout streak evidence, and explicit `not_observed` state for unexposed transitions;
+  totals, and timeout streak evidence;
 - collector evidence distinguishing hook-only, incremental-parent-tail, and explicit legacy
-  recovery; byte cursor boundaries; child bytes processed; and proof that raw prompts/messages
-  were not stored.
+  recovery; byte cursor boundaries; and child bytes processed.
 
-The collector automatically writes anomalies for failed dispatches, explicit-request or
+The collector can emit factual anomaly sidecars for failed dispatches, explicit-request or
 native-role runtime mismatch, nested delegation, a nonterminal child lifecycle, unresolved
 terminal task-to-agent binding, a child labeled completed without a tool call or final message,
-a completed child with tool activity but no final assistant message (`child-delivery-failure`), or a
-an explicit fork request contradicted by child session metadata
+a completed child with tool activity but no final assistant message (`child-delivery-failure`), or an
+explicit fork request contradicted by child session metadata
 (`fork-request-observation-mismatch`), or a later immutable correction. Binding is evidence-based: tool
 ids, direct child ids, explicit follow-up targets, and unique child-session paths may establish
 identity; a previously bound child turn preserves that ownership across follow-ups, but concurrent
 start/stop order never does. If a successful terminal spawn cannot be
 connected uniquely, the record keeps it `unbound` or `ambiguous`, preserves any candidates, and
-adds `agent-binding-uncertainty` instead of guessing. Records emitted under lifecycle policy v1
-also require `child-lifecycle-incomplete` whenever a child lacks terminal or reclaim evidence;
-the audit does not retroactively impose this requirement on historical records without the policy
-marker. Records emitted under zero-yield policy v1 likewise require `zero-yield-child` when a
-completed child has neither a tool call nor final-message characters; historical records without
-that marker are not retroactively reclassified. Records emitted under child-metric-boundary v1
-exclude inherited fork context from the child's turns, tools, tokens, and final-message totals.
+adds `agent-binding-uncertainty` instead of guessing. Inherited fork context is excluded from the
+child's turns, tools, tokens, and final-message totals.
 Records with an unresolved fork boundary carry `metric_validity=invalid` and
 `metric_scope=fork-boundary-unknown`; historical replay records remain explicitly marked as
 `transcript-replay`/legacy and are not backfilled during normal closeout.
 `metric_boundary_method` records whether a boundary came from an exact child id or UUIDv7 anchor
 (`child-id`/`uuidv7-time`) versus a timestamp/gap legacy fallback; the latter is
 `metric_validity=legacy-unverified` and must not support efficiency claims.
-Current and historical role runtimes and service tiers come from
-`~/.codex/agent-team-policy.toml`. The recorder resolves expectations by role and session start time;
-it does not duplicate model, effort, tier, alias, or cutover constants. Missing/null observed tiers
-are not mismatches. Historical runtime remains explicit and immutable, while new sessions are judged
-against the policy revision effective when they started.
 
-## Schema v4 (Future Hook Records)
+## Schema v4 (Hook Records)
 
 Schema v4 leaves schema-v2/v3 files immutable and makes the evidence boundary explicit:
 
 - `finalization` records whether the snapshot came from the parent `Stop` hook, a late
   `SubagentStop` correction, or an explicit manual closeout;
-- `runtime_resolution.requested`, `.expected`, and `.observed` are separate. The expected model,
-  effort, canonical service tier, tier aliases, configured sandbox, policy version, and effective
-  timestamps are resolved from `agent-team-policy.toml`; an unexposed observed service tier remains
-  `null`/`not_observed` rather than being filled with the expected value;
+- `runtime_resolution.requested`, `.expected`, and `.observed` are separate. `.expected` stores the
+  allowlisted settings read from the selected role TOML when `SubagentStart` arrives. `captured_at`
+  is receipt time for that event, not proof of the child's actual configuration at that start.
+  Observed runtime remains separate; missing expected or observed values stay unknown;
 - `effective_authority` records the child-local `sandbox_policy.type`,
   `permission_profile.type`, approval policy/reviewer, Hook permission mode, and only the count of
   workspace roots. It never stores workspace paths;
@@ -343,14 +319,17 @@ Schema v4 leaves schema-v2/v3 files immutable and makes the evidence boundary ex
 - a proven mismatch between the configured role sandbox and effective child sandbox produces
   `authority-contract-mismatch`.
 
-The full audit continues to validate active schema-v2/v3 records while new Hook records use schema
-v4. Transcript replay remains schema v3 and is a maintenance fallback, not the future collection
-path.
+The full audit checks readable record structure and references. Automatic factual anomaly sidecars
+are optional indexes; a recorded runtime problem remains evidence and does not make its routine
+record invalid. Hook records use schema v4; transcript replay remains schema v3 and is a maintenance
+fallback, not the future collection path.
+
+Runtime comparisons use each record's own `runtime_resolution.expected` snapshot. A missing
+snapshot leaves the expectation unknown; today's policy does not establish an older runtime.
 
 Historical `record_closeout.py record` output carries the same field as
 `coordination_metrics`, but marks it `observability=legacy` (or `unknown` when no parent session
-was supplied).  It does not infer readiness, commitment, live status, or steering application
-from replayed tool completions.
+was supplied).
 
 Structured Agent Team records only exist for turns that attempted native-agent activity. They can
 detect dispatch, lifecycle, binding, runtime, and zero-yield defects, but cannot prove that a root
@@ -425,12 +404,10 @@ copy their contents.
 
 ## Hook Configuration and Trust
 
-The user hook is stored in `~/.codex/hooks.json`. It must contain handlers for current Agent-matched
-`PreToolUse`/`PostToolUse`, `SubagentStart`, `SubagentStop`, and one global `Stop` closeout. The static
-validator checks matcher coverage, deliberate polling exclusions, lifecycle handlers, the exact
-`auto-finalize` Stop command, and the recorder path. The Stop process performs an exact journal-path
-existence check before creating any directory or reading a transcript, so ordinary turns are a
-bounded no-op while delegated turns cannot silently remain unfinalized.
+The user Hook configuration is stored in `<codex-home>/hooks.json`; recording Hooks are optional.
+The Stop process performs an exact journal-path existence check before creating any directory or
+reading a transcript, so ordinary turns are a bounded no-op while delegated turns cannot silently
+remain unfinalized.
 
 Codex requires review and trust whenever a non-managed hook definition changes. In Codex Desktop,
 open the user-configuration Hook list, expand each changed hook, review its command, click Trust,
@@ -465,11 +442,6 @@ explicit maintenance—not after every routine closeout:
 Run bounded coverage reconciliation only as an explicit maintenance action:
 
     python3 scripts/record_closeout.py reconcile --help
-
-After changing the policy/controller, run only its focused tests and bounded coherence check:
-
-    python3 -m unittest scripts/test_agent_policy.py scripts/test_agent_speed.py
-    python3 scripts/agent_speed.py validate
 
 `record_common.py` is an internal dependency loaded from the same `scripts/` directory as both
 recording entrypoints; deploy and validate these files together.

@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from graphlib import CycleError, TopologicalSorter
 import json
 import os
-import re
 import secrets
 import sys
 from collections import Counter
@@ -18,21 +18,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import agent_policy  # noqa: E402
 import record_common  # noqa: E402
+from agent_policy import default_codex_home  # noqa: E402
 
 
-DEFAULT_ROOT = Path.home() / ".codex" / "agent-team-records"
-AGENT_POLICY = agent_policy.load_policy()
+DEFAULT_ROOT = record_common.DEFAULT_RECORD_ROOT
 SCHEMA_VERSION = 3
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
-SUPPORTED_SCHEMA_VERSIONS = {2, 3, 4}
 ANOMALY_TYPES = (
-    "role-overlap",
-    "premature-upgrade",
-    "specialist-candidate",
-    "coordination-loss",
     "dispatch-failure",
     "runtime-capability-mismatch",
     "topology-violation",
@@ -46,8 +40,6 @@ ANOMALY_TYPES = (
 TOOL_CALL_TYPES = {"custom_tool_call", "function_call"}
 TOOL_OUTPUT_TYPES = {"custom_tool_call_output", "function_call_output"}
 COORDINATION_OPERATIONS = record_common.COORDINATION_OPERATIONS
-WAIT_OUTCOMES = record_common.WAIT_OUTCOMES
-COORDINATION_CLASSIFIER_VERSION = record_common.COORDINATION_CLASSIFIER_VERSION
 is_spawn_tool = record_common.is_spawn_tool
 normalize_coordination_operation = record_common.normalize_coordination_operation
 classify_wait_outcome = record_common.classify_wait_outcome
@@ -59,13 +51,6 @@ delivery_failure_messages = record_common.delivery_failure_messages
 fork_request_observation_mismatch_messages = record_common.fork_request_observation_mismatch_messages
 parent_message_phase = record_common.parent_message_phase
 elapsed_ms = record_common.elapsed_ms
-FORK_REQUEST_OBSERVABILITY = {
-    "observed",
-    "omitted",
-    "invalid",
-    "not_observed",
-    "legacy",
-}
 
 
 def empty_coordination_metrics(
@@ -440,29 +425,6 @@ def metric_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if session_index == boundary:
         return events
     return [events[session_index], *events[boundary:]]
-
-
-def expected_role_runtimes(agent: dict[str, Any]) -> tuple[tuple[str, str], ...] | None:
-    return agent_policy.expected_role_runtimes(
-        AGENT_POLICY, agent.get("role"), agent.get("started_at")
-    )
-
-
-def service_tier_mismatch(agent: dict[str, Any]) -> str | None:
-    role = agent.get("actual_role") or agent.get("role")
-    expected = agent_policy.expected_service_tier_aliases(
-        AGENT_POLICY, role, agent.get("started_at")
-    )
-    observed = agent.get("service_tier")
-    if not expected or not isinstance(observed, str) or not observed.strip():
-        return None
-    normalized = observed.strip().lower()
-    if normalized in expected:
-        return None
-    return (
-        f"{agent.get('agent_id') or 'unknown'} role {role} expected service tier "
-        f"{('/'.join(sorted(expected)))} aliases, observed {observed}"
-    )
 
 
 def compact_token_usage(events: list[dict[str, Any]]) -> dict[str, int] | None:
@@ -971,28 +933,6 @@ def aggregate_outcome(
     return "unknown"
 
 
-def runtime_contract_mismatches(agents: list[dict[str, Any]]) -> list[str]:
-    mismatches: list[str] = []
-    for agent in agents:
-        expected = expected_role_runtimes(agent)
-        if expected is not None:
-            actual = (agent.get("model"), agent.get("reasoning_effort"))
-        else:
-            actual = None
-        if expected is not None and actual not in expected:
-            expected_text = " or ".join(
-                f"{model}/{effort}" for model, effort in expected
-            )
-            mismatches.append(
-                f"{agent['agent_id']} role {agent['role']} expected {expected_text}, "
-                f"observed {actual[0]}/{actual[1]}"
-            )
-        tier_mismatch = service_tier_mismatch(agent)
-        if tier_mismatch:
-            mismatches.append(tier_mismatch)
-    return mismatches
-
-
 def binding_uncertainty_messages(
     attempts: list[dict[str, Any]], agents: list[dict[str, Any]]
 ) -> list[str]:
@@ -1091,7 +1031,7 @@ def parser() -> argparse.ArgumentParser:
     reconcile.add_argument(
         "--sessions-root",
         type=Path,
-        default=Path.home() / ".codex" / "sessions",
+        default=default_codex_home() / "sessions",
         help="Session tree to scan when --session is not supplied.",
     )
     reconcile.add_argument(
@@ -1120,19 +1060,6 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--agent-session", action="append", type=Path, default=[])
     record.add_argument("--agent-summary", action="append", default=[])
     record.add_argument("--agent-task", action="append", default=[])
-    record.add_argument(
-        "--role-fit", choices=("clear", "overlap", "misroute", "unclear"), required=True
-    )
-    record.add_argument(
-        "--upgrade", choices=("none", "accepted", "declined", "unresolved"), required=True
-    )
-    record.add_argument("--specialist-candidate")
-    record.add_argument(
-        "--team-value",
-        choices=("positive", "neutral", "negative", "unclear"),
-        required=True,
-    )
-    record.add_argument("--evidence", required=True)
     record.add_argument("--anomaly-type", action="append", choices=ANOMALY_TYPES, default=[])
     record.add_argument("--anomaly-summary")
     record.add_argument("--anomaly-evidence")
@@ -1207,15 +1134,20 @@ def audit_records(root: Path) -> dict[str, Any]:
             if target not in routines:
                 errors.append(f"{record_id}: supersedes missing record {target}")
 
+    try:
+        TopologicalSorter(superseded_by).prepare()
+    except CycleError as error:
+        errors.append("supersedes cycle: " + " -> ".join(error.args[1]))
+
     active_ids = sorted(record_id for record_id in routines if record_id not in superseded_by)
     active_turns: dict[tuple[str, str], str] = {}
     for record_id in active_ids:
         payload = routines[record_id]
-        if payload.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
-            continue
         key = (payload.get("parent_thread_id"), payload.get("turn_id"))
+        if not any(key):
+            continue
         if not all(isinstance(value, str) and value for value in key):
-            errors.append(f"{record_id}: active schema-v2 record lacks thread/turn identity")
+            errors.append(f"{record_id}: active record lacks thread/turn identity")
             continue
         if key in active_turns:
             errors.append(
@@ -1226,7 +1158,6 @@ def audit_records(root: Path) -> dict[str, Any]:
             active_turns[key] = record_id
 
     anomalies: list[dict[str, Any]] = []
-    anomaly_types_by_record: dict[str, set[str]] = {}
     if anomaly_dir.is_dir():
         for path in sorted(anomaly_dir.glob("*.json")):
             try:
@@ -1253,11 +1184,6 @@ def audit_records(root: Path) -> dict[str, Any]:
             ):
                 errors.append(f"{path}: anomaly_types must be an array of strings")
                 anomaly_types = []
-            if isinstance(related, str) and related:
-                related_id = related.removesuffix(".json")
-                anomaly_types_by_record.setdefault(related_id, set()).update(
-                    anomaly_types
-                )
             anomalies.append(
                 {
                     "record_id": anomaly_record_id,
@@ -1266,350 +1192,22 @@ def audit_records(root: Path) -> dict[str, Any]:
                     "path": str(path.resolve()),
                 }
             )
-
     for record_id in active_ids:
         payload = routines[record_id]
-        if payload.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+        agents = payload.get("agents", [])
+        attempts = payload.get("spawn_attempts", [])
+        if not isinstance(agents, list) or not isinstance(attempts, list):
+            errors.append(f"{record_id}: agents and spawn_attempts must be arrays")
             continue
-        agents = payload.get("agents")
-        attempts = payload.get("spawn_attempts")
-        if not isinstance(agents, list):
-            errors.append(f"{record_id}: agents must be an array")
-            continue
-        if not isinstance(attempts, list):
-            errors.append(f"{record_id}: spawn_attempts must be an array")
-            attempts = []
-        if payload.get("child_count") != len(agents):
-            errors.append(f"{record_id}: child_count does not match agents")
-        if payload.get("attempt_count") != len(attempts):
-            errors.append(f"{record_id}: attempt_count does not match spawn_attempts")
+        for count, rows in (("child_count", agents), ("attempt_count", attempts)):
+            if count in payload and payload[count] != len(rows):
+                errors.append(f"{record_id}: {count} does not match stored rows")
+        for index, agent in enumerate(agents):
+            if not isinstance(agent, dict) or not isinstance(agent.get("agent_id"), str):
+                errors.append(f"{record_id}: agents[{index}] lacks agent identity")
         for index, attempt in enumerate(attempts):
             if not isinstance(attempt, dict):
-                continue
-            requested_fork_turns = attempt.get("requested_fork_turns")
-            if requested_fork_turns is not None and not (
-                requested_fork_turns in {"none", "all"}
-                if isinstance(requested_fork_turns, str)
-                else isinstance(requested_fork_turns, int)
-                and not isinstance(requested_fork_turns, bool)
-                and requested_fork_turns > 0
-            ):
-                errors.append(
-                    f"{record_id}: spawn_attempts[{index}] has invalid requested_fork_turns"
-                )
-            fork_observability = attempt.get("requested_fork_turns_observability")
-            if fork_observability is not None and fork_observability not in FORK_REQUEST_OBSERVABILITY:
-                errors.append(
-                    f"{record_id}: spawn_attempts[{index}] has invalid fork request observability"
-                )
-        valid_roles = [
-            agent.get("actual_role")
-            if agent.get("actual_role") is not None
-            else agent.get("role")
-            for agent in agents
-            if isinstance(agent, dict)
-            and isinstance(
-                agent.get("actual_role")
-                if agent.get("actual_role") is not None
-                else agent.get("role"),
-                str,
-            )
-        ]
-        expected_role_counts = dict(sorted(Counter(valid_roles).items()))
-        if payload.get("role_counts") != expected_role_counts:
-            errors.append(f"{record_id}: role_counts does not match agents")
-        valid_agents: list[dict[str, Any]] = []
-        for index, agent in enumerate(agents):
-            if not isinstance(agent, dict):
-                errors.append(f"{record_id}: agents[{index}] must be an object")
-                continue
-            if not isinstance(agent.get("turn_count"), int) or agent["turn_count"] < 1:
-                errors.append(f"{record_id}: agents[{index}] lacks a positive turn_count")
-            if not isinstance(agent.get("agent_id"), str):
-                errors.append(f"{record_id}: agents[{index}] lacks agent_id")
-                continue
-            observed_fork = agent.get("fork_observed")
-            if observed_fork is not None and not isinstance(observed_fork, bool):
-                errors.append(f"{record_id}: agents[{index}] fork_observed must be boolean/null")
-            observation_source = agent.get("fork_observation_source")
-            if observation_source is not None and observation_source not in {
-                "child-session-meta",
-                "not_observed",
-                "legacy",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid fork observation source"
-                )
-            valid_agents.append(agent)
-        mismatches = runtime_contract_mismatches(valid_agents)
-        if mismatches and "runtime-capability-mismatch" not in anomaly_types_by_record.get(
-            record_id, set()
-        ):
-            errors.append(
-                f"{record_id}: unclassified native-role runtime mismatch: "
-                + "; ".join(mismatches)
-            )
-        binding_issues = (
-            binding_uncertainty_messages(attempts, valid_agents)
-            if len(valid_agents) == len(agents)
-            else []
-        )
-        if binding_issues and "agent-binding-uncertainty" not in anomaly_types_by_record.get(
-            record_id, set()
-        ):
-            errors.append(
-                f"{record_id}: unresolved native-agent binding lacks "
-                "agent-binding-uncertainty anomaly: "
-                + "; ".join(binding_issues)
-            )
-        collector = payload.get("collector")
-        boundary_version = (
-            collector.get("child_metric_boundary_version")
-            if isinstance(collector, dict)
-            else None
-        )
-        if boundary_version is not None and (
-            isinstance(boundary_version, bool)
-            or not isinstance(boundary_version, int)
-            or boundary_version < 0
-        ):
-            errors.append(
-                f"{record_id}: child_metric_boundary_version marker must be a "
-                "non-negative integer"
-            )
-        for version_field, classify, anomaly, label in (
-            ("lifecycle_policy_version", lifecycle_incomplete_messages,
-             "child-lifecycle-incomplete", "nonterminal child lifecycle"),
-            ("zero_yield_policy_version", zero_yield_messages,
-             "zero-yield-child", "completed zero-yield child"),
-            ("delivery_failure_policy_version", delivery_failure_messages,
-             "child-delivery-failure", "completed child delivery failure"),
-        ):
-            version = collector.get(version_field, 0) if isinstance(collector, dict) else 0
-            if isinstance(version, bool) or not isinstance(version, int):
-                errors.append(f"{record_id}: {version_field} marker must be an integer")
-                version = 0
-            issues = classify(valid_agents)
-            if version >= 1 and issues and anomaly not in anomaly_types_by_record.get(record_id, set()):
-                errors.append(f"{record_id}: {label} lacks {anomaly} anomaly: " + "; ".join(issues))
-        for index, agent in enumerate(valid_agents):
-            metric_validity = agent.get("metric_validity")
-            metric_scope = agent.get("metric_scope")
-            if metric_validity is not None and metric_validity not in {
-                "valid",
-                "invalid",
-                "unobserved",
-                "legacy-unverified",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid metric_validity"
-                )
-            if metric_scope is not None and metric_scope not in {
-                "child-local",
-                "fork-boundary-unknown",
-                "unobserved",
-                "legacy",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid metric_scope"
-                )
-            metric_observability = agent.get("metric_observability")
-            if metric_observability is not None and metric_observability not in {
-                "incremental-child-cursor",
-                "transcript-replay",
-                "missing",
-                "legacy",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid metric_observability"
-                )
-            boundary_method = agent.get("metric_boundary_method")
-            if boundary_method is not None and boundary_method not in {
-                "child-id",
-                "uuidv7-time",
-                "timestamp-transition",
-                "timestamp-gap",
-                "unknown",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid metric_boundary_method"
-                )
-            tier = agent.get("service_tier")
-            tier_source = agent.get("service_tier_source")
-            if tier is not None and not isinstance(tier, str):
-                errors.append(f"{record_id}: agents[{index}] service_tier must be string/null")
-            if tier is None and tier_source not in {None, "not_observed", "missing"}:
-                errors.append(
-                    f"{record_id}: agents[{index}] missing service_tier cannot claim observed source"
-                )
-            if tier_source is not None and tier_source not in {
-                "child-turn-context",
-                "child-session-meta",
-                "subagent-stop-hook",
-                "not_observed",
-                "missing",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid service_tier_source"
-                )
-            tier_observability = agent.get("service_tier_observability")
-            if tier_observability is not None and tier_observability not in {
-                "observed",
-                "not_observed",
-            }:
-                errors.append(
-                    f"{record_id}: agents[{index}] has invalid service_tier_observability"
-                )
-            if payload.get("schema_version") == 4:
-                if agent.get("child_session_id") == payload.get("parent_thread_id"):
-                    errors.append(
-                        f"{record_id}: agents[{index}] binds the parent session as a child"
-                    )
-                runtime_resolution = agent.get("runtime_resolution")
-                if not isinstance(runtime_resolution, dict):
-                    errors.append(
-                        f"{record_id}: agents[{index}] lacks runtime_resolution"
-                    )
-                else:
-                    expected_runtime = runtime_resolution.get("expected")
-                    observed_runtime = runtime_resolution.get("observed")
-                    runtime_match = runtime_resolution.get("match")
-                    if expected_runtime is not None and not isinstance(
-                        expected_runtime, dict
-                    ):
-                        errors.append(
-                            f"{record_id}: agents[{index}] expected runtime is invalid"
-                        )
-                    if not isinstance(observed_runtime, dict) or not isinstance(
-                        runtime_match, dict
-                    ):
-                        errors.append(
-                            f"{record_id}: agents[{index}] runtime evidence is incomplete"
-                        )
-                    if isinstance(expected_runtime, dict) and expected_runtime.get(
-                        "service_tier"
-                    ) not in {"fast", "standard"}:
-                        errors.append(
-                            f"{record_id}: agents[{index}] expected service tier is invalid"
-                        )
-                authority = agent.get("effective_authority")
-                if not isinstance(authority, dict) or authority.get("source") not in {
-                    "child-turn-context",
-                    "not_observed",
-                }:
-                    errors.append(
-                        f"{record_id}: agents[{index}] effective authority is invalid"
-                    )
-                provenance = agent.get("runtime_provenance")
-                if not isinstance(provenance, dict) or provenance.get("source") not in {
-                    "child-session-and-turn-context",
-                    "not_observed",
-                }:
-                    errors.append(
-                        f"{record_id}: agents[{index}] runtime provenance is invalid"
-                    )
-                snapshot = agent.get("metric_snapshot")
-                if (
-                    not isinstance(snapshot, dict)
-                    or snapshot.get("semantics") != "cumulative-child-session"
-                    or snapshot.get("aggregation")
-                    != "sum-active-record-delta-only"
-                    or not isinstance(snapshot.get("sequence"), int)
-                    or snapshot.get("sequence", 0) < 1
-                    or not isinstance(snapshot.get("revision"), int)
-                    or snapshot.get("revision", 0) < 1
-                    or not isinstance(snapshot.get("cumulative"), dict)
-                    or not isinstance(snapshot.get("delta"), dict)
-                    or not isinstance(snapshot.get("reset_detected"), bool)
-                ):
-                    errors.append(
-                        f"{record_id}: agents[{index}] metric snapshot is invalid"
-                    )
-        nested = [
-            agent
-            for agent in valid_agents
-            if isinstance(agent.get("nested_agent_calls"), int)
-            and agent["nested_agent_calls"] > 0
-        ]
-        if nested and "topology-violation" not in anomaly_types_by_record.get(
-            record_id, set()
-        ):
-            errors.append(
-                f"{record_id}: nested-agent calls lack topology-violation anomaly"
-            )
-        if payload.get("schema_version") in {3, 4}:
-            collection_mode = payload.get("collection_mode")
-            if collection_mode not in {
-                "codex-hooks-incremental",
-                "transcript-replay-fallback",
-            }:
-                errors.append(f"{record_id}: invalid schema-v3/v4 collection_mode")
-            if payload.get("schema_version") == 4:
-                finalization = payload.get("finalization")
-                if (
-                    not isinstance(finalization, dict)
-                    or finalization.get("trigger")
-                    not in {
-                        "manual-cli",
-                        "parent-stop-hook",
-                        "late-subagent-stop-hook",
-                    }
-                    or not isinstance(finalization.get("automatic"), bool)
-                ):
-                    errors.append(f"{record_id}: schema-v4 finalization is invalid")
-                elif (
-                    finalization.get("trigger") == "parent-stop-hook"
-                    and finalization.get("provenance_verified") is not True
-                ):
-                    errors.append(
-                        f"{record_id}: automatic Stop finalization lacks verified provenance"
-                    )
-            if collection_mode == "codex-hooks-incremental":
-                collector = payload.get("collector")
-                if not isinstance(collector, dict):
-                    errors.append(f"{record_id}: hook record lacks collector evidence")
-                else:
-                    parent_bytes = collector.get("parent_transcript_bytes_processed")
-                    child_bytes = collector.get("child_transcript_bytes_processed")
-                    strategy = collector.get("transcript_strategy")
-                    if (
-                        not isinstance(parent_bytes, int)
-                        or parent_bytes < 0
-                        or not isinstance(child_bytes, int)
-                        or child_bytes < 0
-                        or collector.get("raw_prompts_stored") is not False
-                        or collector.get("raw_messages_stored") is not False
-                        or strategy
-                        not in {
-                            "incremental-byte-cursor",
-                            "hook-events-plus-child-byte-cursors",
-                            "hook-events-plus-incremental-parent-tail",
-                            "hook-events-plus-legacy-parent-recovery",
-                        }
-                    ):
-                        errors.append(
-                            f"{record_id}: hook collector privacy/incremental evidence is invalid"
-                        )
-                    if strategy == "hook-events-plus-incremental-parent-tail":
-                        start = collector.get("parent_cursor_start_offset")
-                        end = collector.get("parent_cursor_end_offset")
-                        if (
-                            not isinstance(start, int)
-                            or not isinstance(end, int)
-                            or end < start
-                            or parent_bytes != end - start
-                            or collector.get("parent_legacy_full_scan") is not False
-                        ):
-                            errors.append(
-                                f"{record_id}: parent-tail cursor evidence is inconsistent"
-                            )
-                    if (
-                        strategy == "hook-events-plus-legacy-parent-recovery"
-                        and collector.get("parent_legacy_full_scan") is not True
-                    ):
-                        errors.append(
-                            f"{record_id}: legacy parent recovery lacks explicit marker"
-                        )
+                errors.append(f"{record_id}: spawn_attempts[{index}] must be an object")
 
     def summary(record_id: str) -> dict[str, Any]:
         payload = routines[record_id]
@@ -1806,7 +1404,7 @@ def reconcile_coverage(
             "bounded reconciliation requires both --since and --until or explicit --session inputs"
         )
     if not paths:
-        scan_root = (sessions_root or (Path.home() / ".codex" / "sessions")).expanduser()
+        scan_root = (sessions_root or (default_codex_home() / "sessions")).expanduser()
         if scan_root.is_dir():
             paths = sorted(path.resolve() for path in scan_root.rglob("*.jsonl"))
     session_evidence: list[dict[str, Any]] = []
@@ -2118,8 +1716,6 @@ def reconcile_coverage(
         "role_mismatches": role_mismatches,
         "invalid_metric_identifiers": invalid_metric_identifiers,
         "unmatched_structured_records": unmatched_structured_records,
-        "raw_prompts_stored": False,
-        "raw_messages_stored": False,
         "valid": not (
             missing_structured_records
             or duplicate_structured_records
@@ -2170,126 +1766,36 @@ def build_payloads(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
         raise ValueError("correction records require at least one --supersedes id")
 
     binding_issues = binding_uncertainty_messages(attempts, agents)
-    if binding_issues and "agent-binding-uncertainty" not in args.anomaly_type:
-        args.anomaly_type.append("agent-binding-uncertainty")
-    if binding_issues:
-        if (
-            not args.anomaly_summary
-            and not args.anomaly_evidence
-            and not args.anomaly_impact
-        ):
-            args.anomaly_summary = (
-                "Automatic transcript evidence detected unresolved agent binding."
-            )
-            args.anomaly_evidence = "; ".join(binding_issues)
-            args.anomaly_impact = (
-                "The successful spawn cannot be uniquely connected to a child session."
-            )
-        elif args.anomaly_evidence:
-            args.anomaly_evidence = (
-                f"{args.anomaly_evidence}; {'; '.join(binding_issues)}"
-            )
-
     lifecycle_issues = lifecycle_incomplete_messages(agents)
-    if lifecycle_issues and "child-lifecycle-incomplete" not in args.anomaly_type:
-        args.anomaly_type.append("child-lifecycle-incomplete")
-    if lifecycle_issues:
-        if (
-            not args.anomaly_summary
-            and not args.anomaly_evidence
-            and not args.anomaly_impact
-        ):
-            args.anomaly_summary = (
-                "Automatic transcript evidence detected incomplete child lifecycle."
-            )
-            args.anomaly_evidence = "; ".join(lifecycle_issues)
-            args.anomaly_impact = (
-                "The child lacks terminal or reclaim evidence and is not a normal closeout."
-            )
-        elif args.anomaly_evidence:
-            args.anomaly_evidence = (
-                f"{args.anomaly_evidence}; {'; '.join(lifecycle_issues)}"
-            )
-
     zero_yield_issues = zero_yield_messages(agents)
-    if zero_yield_issues and "zero-yield-child" not in args.anomaly_type:
-        args.anomaly_type.append("zero-yield-child")
-    if zero_yield_issues:
-        if (
-            not args.anomaly_summary
-            and not args.anomaly_evidence
-            and not args.anomaly_impact
-        ):
-            args.anomaly_summary = (
-                "Automatic transcript evidence detected a completed child with zero yield."
-            )
-            args.anomaly_evidence = "; ".join(zero_yield_issues)
-            args.anomaly_impact = (
-                "The child reached completion without tool calls or a final message."
-            )
-        elif args.anomaly_evidence:
-            args.anomaly_evidence = (
-                f"{args.anomaly_evidence}; {'; '.join(zero_yield_issues)}"
-            )
-
     delivery_issues = delivery_failure_messages(agents)
-    if delivery_issues and "child-delivery-failure" not in args.anomaly_type:
-        args.anomaly_type.append("child-delivery-failure")
-    if delivery_issues:
-        if (
-            not args.anomaly_summary
-            and not args.anomaly_evidence
-            and not args.anomaly_impact
-        ):
-            args.anomaly_summary = (
-                "Automatic transcript evidence detected a completed child delivery failure."
-            )
-            args.anomaly_evidence = "; ".join(delivery_issues)
-            args.anomaly_impact = (
-                "The child performed tool activity but no final assistant message was delivered."
-            )
-        elif args.anomaly_evidence:
-            args.anomaly_evidence = (
-                f"{args.anomaly_evidence}; {'; '.join(delivery_issues)}"
-            )
-
     fork_mismatch_issues = fork_request_observation_mismatch_messages(
         attempts, agents
     )
-    if fork_mismatch_issues and "fork-request-observation-mismatch" not in args.anomaly_type:
-        args.anomaly_type.append("fork-request-observation-mismatch")
-    if fork_mismatch_issues:
-        if (
-            not args.anomaly_summary
-            and not args.anomaly_evidence
-            and not args.anomaly_impact
-        ):
-            args.anomaly_summary = (
-                "Automatic transcript evidence detected a fork request/observation mismatch."
-            )
-            args.anomaly_evidence = "; ".join(fork_mismatch_issues)
-            args.anomaly_impact = (
-                "The child session fork state differs from the sanitized spawn request."
-            )
-        elif args.anomaly_evidence:
-            args.anomaly_evidence = (
-                f"{args.anomaly_evidence}; {'; '.join(fork_mismatch_issues)}"
-            )
-
-    anomaly_fields = (args.anomaly_summary, args.anomaly_evidence, args.anomaly_impact)
-    if args.anomaly_type and not all(anomaly_fields):
-        raise ValueError(
-            "anomaly records require --anomaly-summary, --anomaly-evidence, and --anomaly-impact"
+    automatic_issue_sets = (
+        ("agent-binding-uncertainty", binding_issues),
+        ("child-lifecycle-incomplete", lifecycle_issues),
+        ("zero-yield-child", zero_yield_issues),
+        ("child-delivery-failure", delivery_issues),
+        ("fork-request-observation-mismatch", fork_mismatch_issues),
+    )
+    automatic_evidence: list[str] = []
+    for anomaly_type, issues in automatic_issue_sets:
+        if issues:
+            if anomaly_type not in args.anomaly_type:
+                args.anomaly_type.append(anomaly_type)
+            automatic_evidence.extend(issues)
+    if automatic_evidence:
+        observed_evidence = "; ".join(automatic_evidence)
+        args.anomaly_evidence = (
+            f"{args.anomaly_evidence}; {observed_evidence}"
+            if args.anomaly_evidence
+            else observed_evidence
         )
-    if not args.anomaly_type and any(anomaly_fields):
+    if not args.anomaly_type and any(
+        (args.anomaly_summary, args.anomaly_evidence, args.anomaly_impact)
+    ):
         raise ValueError("anomaly detail fields require at least one --anomaly-type")
-    runtime_mismatches = runtime_contract_mismatches(agents)
-    if runtime_mismatches and "runtime-capability-mismatch" not in args.anomaly_type:
-        raise ValueError(
-            "native-role runtime mismatch requires "
-            "--anomaly-type runtime-capability-mismatch: "
-            + "; ".join(runtime_mismatches)
-        )
 
     now = datetime.now(timezone.utc)
     record_id = f"{now.strftime('%Y%m%dT%H%M%S%fZ')}-{secrets.token_hex(4)}"
@@ -2333,33 +1839,8 @@ def build_payloads(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
         "agents": agents,
         "spawn_attempts": attempts,
         "coordination_metrics": coordination_metrics,
-        "role_fit": args.role_fit,
-        "upgrade": args.upgrade,
-        "specialist_candidate": optional_bounded(
-            args.specialist_candidate, "specialist_candidate", 160
-        ),
-        "team_value": args.team_value,
-        "evidence": bounded(args.evidence, "evidence", 1200),
-        "assessment": {
-            "source": "parent",
-            "role_fit": args.role_fit,
-            "upgrade": args.upgrade,
-            "specialist_candidate": optional_bounded(
-                args.specialist_candidate, "specialist_candidate", 160
-            ),
-            "team_value": args.team_value,
-            "evidence": bounded(args.evidence, "evidence", 1200),
-        },
         "collector": {
-            "lifecycle_policy_version": 1,
-            "child_metric_boundary_version": 1,
-            "zero_yield_policy_version": 1,
-            "delivery_failure_policy_version": 1,
-            "metric_observability_version": 1,
-            "coordination_telemetry_version": 1,
             "transcript_strategy": "full-replay-fallback",
-            "raw_prompts_stored": False,
-            "raw_messages_stored": False,
             "coordination_metrics_source": coordination_metrics.get("source"),
         },
     }
@@ -2369,9 +1850,9 @@ def build_payloads(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, 
             **common,
             "related_routine": f"{record_id}.json",
             "anomaly_types": sorted(set(args.anomaly_type)),
-            "summary": bounded(args.anomaly_summary, "anomaly_summary", 500),
-            "evidence": bounded(args.anomaly_evidence, "anomaly_evidence", 1600),
-            "impact": bounded(args.anomaly_impact, "anomaly_impact", 800),
+            "summary": optional_bounded(args.anomaly_summary, "anomaly_summary", 500),
+            "evidence": optional_bounded(args.anomaly_evidence, "anomaly_evidence", 1600),
+            "impact": optional_bounded(args.anomaly_impact, "anomaly_impact", 800),
         }
     return routine_payload, anomaly_payload
 

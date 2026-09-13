@@ -7,14 +7,11 @@ import argparse
 import json
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
 import time
-import uuid
 from collections import deque
-from pathlib import Path
 from typing import Any, NoReturn, TextIO
 
 
@@ -29,28 +26,6 @@ class ThreadReadError(RuntimeError):
 
 def fail(message: str) -> NoReturn:
     raise ThreadReadError(message)
-
-
-def resolve_codex(value: str) -> str:
-    if os.sep in value:
-        candidate = Path(value).expanduser()
-        if not candidate.is_absolute():
-            candidate = candidate.resolve()
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            fail(f"Codex executable is missing or not executable: {candidate}")
-        return str(candidate)
-    resolved = shutil.which(value)
-    if resolved is None:
-        fail(f"Codex executable was not found on PATH: {value}")
-    return resolved
-
-
-def normalize_thread_id(value: str) -> str:
-    try:
-        parsed = uuid.UUID(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"invalid Codex thread id: {value!r}")
-    return str(parsed)
 
 
 class AppServerClient:
@@ -244,13 +219,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"per-request timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("doctor", help="verify app-server initialization only")
 
     metadata = subparsers.add_parser("metadata", help="read thread metadata without turns")
-    metadata.add_argument("--thread-id", required=True, type=normalize_thread_id)
+    metadata.add_argument("--thread-id", required=True)
 
     turns = subparsers.add_parser("turns", help="read one bounded page of thread turns")
-    turns.add_argument("--thread-id", required=True, type=normalize_thread_id)
+    turns.add_argument("--thread-id", required=True)
     turns.add_argument("--cursor")
     turns.add_argument("--limit", type=int, choices=range(1, MAX_TURN_LIMIT + 1), default=5)
     turns.add_argument("--sort", choices=("asc", "desc"), default="desc")
@@ -290,12 +264,9 @@ def validate_thread_metadata(result: Any, requested_thread_id: str) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
-    codex = resolve_codex(args.codex)
+    codex = os.path.expanduser(args.codex)
     with AppServerClient(codex, args.timeout) as client:
-        initialized = client.initialize()
-        if args.command == "doctor":
-            emit("initialize", {"status": "ok", "server": initialized}, codex=codex)
-            return 0
+        client.initialize()
         if args.command == "metadata":
             result = client.request(
                 2,

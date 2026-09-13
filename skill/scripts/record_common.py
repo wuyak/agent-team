@@ -11,7 +11,12 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping
+
+DEFAULT_RECORD_ROOT = Path.home() / ".codex" / "agent-team-records"
+
+
 
 
 COORDINATION_OPERATIONS = (
@@ -326,8 +331,4 @@ def empty_coordination_metrics(
         "timeout_without_agent_update_count": 0,
         # No native event currently proves these transitions.  In particular,
         # a completed PostToolUse is not an applied steering acknowledgement.
-        "commitment": "not_observed",
-        "ready_transition": "not_observed",
-        "steering_applied": "not_observed",
-        "native_live_status": "not_observed",
     }

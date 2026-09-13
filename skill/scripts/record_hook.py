@@ -13,7 +13,7 @@ import re
 import secrets
 import sys
 from collections import Counter
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -26,8 +26,7 @@ import agent_policy  # noqa: E402
 import record_common  # noqa: E402
 
 
-DEFAULT_ROOT = Path.home() / ".codex" / "agent-team-records"
-AGENT_POLICY = agent_policy.load_policy()
+DEFAULT_ROOT = record_common.DEFAULT_RECORD_ROOT
 SCHEMA_VERSION = 4
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
@@ -37,7 +36,6 @@ TOOL_OUTPUT_TYPES = {"custom_tool_call_output", "function_call_output"}
 # not include the read-only polling operations; parent-tail recovery is the
 # only place where they are observed.
 COORDINATION_OPERATIONS = record_common.COORDINATION_OPERATIONS
-WAIT_OUTCOMES = record_common.WAIT_OUTCOMES
 COORDINATION_CALL_CACHE_LIMIT = 256
 COORDINATION_CLASSIFIER_VERSION = record_common.COORDINATION_CLASSIFIER_VERSION
 is_spawn_tool = record_common.is_spawn_tool
@@ -52,13 +50,6 @@ delivery_failure_messages = record_common.delivery_failure_messages
 fork_request_observation_mismatch_messages = record_common.fork_request_observation_mismatch_messages
 _parent_message_phase = record_common.parent_message_phase
 elapsed_ms = record_common.elapsed_ms
-FORK_REQUEST_OBSERVABILITY = {
-    "observed",
-    "omitted",
-    "invalid",
-    "not_observed",
-    "legacy",
-}
 TERMINAL_STATUS = {
     "task_complete": "completed",
     "task_failed": "errored",
@@ -99,27 +90,65 @@ def sanitize_requested_fork_turns(
     )
 
 
-def expected_role_runtimes(agent: dict[str, Any]) -> tuple[tuple[str, str], ...] | None:
-    return agent_policy.expected_role_runtimes(
-        AGENT_POLICY, agent.get("role"), agent.get("started_at")
-    )
+def recorded_expectation(agent: dict[str, Any]) -> dict[str, Any]:
+    resolution = agent.get("runtime_resolution")
+    expected = resolution.get("expected") if isinstance(resolution, dict) else None
+    return expected if isinstance(expected, dict) else {}
+
+
+def expected_role_runtime(agent: dict[str, Any]) -> tuple[str, str] | None:
+    expected = recorded_expectation(agent)
+    model, effort = expected.get("model"), expected.get("reasoning_effort")
+    if not isinstance(model, str) or not model or not isinstance(effort, str) or not effort:
+        return None
+    return model, effort
 
 
 def service_tier_mismatch(agent: dict[str, Any]) -> str | None:
-    role = agent.get("actual_role") or agent.get("role")
-    expected = agent_policy.expected_service_tier_aliases(
-        AGENT_POLICY, role, agent.get("started_at")
-    )
+    expected = recorded_expectation(agent)
+    aliases = expected.get("service_tier_aliases")
+    if not isinstance(aliases, list) or not all(isinstance(v, str) for v in aliases):
+        aliases = []
+    if not aliases:
+        try:
+            aliases = sorted(agent_policy.tier_aliases(expected.get("service_tier")))
+        except agent_policy.PolicyError:
+            return None
     observed = agent.get("service_tier")
-    if not expected or not isinstance(observed, str) or not observed.strip():
+    if not isinstance(observed, str) or not observed.strip() or observed.strip().lower() in aliases:
         return None
-    normalized = observed.strip().lower()
-    if normalized in expected:
+    role = agent.get("actual_role") or agent.get("role")
+    return (f"{agent.get('agent_id') or 'unknown'} role {role} expected service tier "
+            f"{'/'.join(sorted(aliases))} aliases, observed {observed}")
+
+
+def capture_role_settings(role: str | None, captured_at: str) -> dict[str, Any] | None:
+    """Capture allowlisted settings when the start Hook arrives, if available."""
+    try:
+        home = agent_policy.default_codex_home()
+        policy = agent_policy.load_policy(home)
+        spec = policy["roles"].get(role)
+        if spec is None:
+            return None
+        profile = agent_policy.read_toml(home / "agents" / spec["filename"])
+        if profile.get("name") != role:
+            return None
+    except agent_policy.PolicyError:
         return None
-    return (
-        f"{agent.get('agent_id') or 'unknown'} role {role} expected service tier "
-        f"{('/'.join(sorted(expected)))} aliases, observed {observed}"
-    )
+    try:
+        tier = agent_policy.canonical_tier(profile.get("service_tier"))
+    except agent_policy.PolicyError:
+        tier = None
+    return {
+        "role": role,
+        "model": bounded(profile.get("model"), 160),
+        "reasoning_effort": bounded(profile.get("model_reasoning_effort"), 80),
+        "service_tier": tier,
+        "service_tier_aliases": sorted(agent_policy.tier_aliases(tier)) if tier else [],
+        "configured_sandbox_mode": bounded(profile.get("sandbox_mode", "inherit"), 80),
+        "captured_at": captured_at,
+        "source": "role-profile-at-subagent-start-hook",
+    }
 
 
 def key_for(*values: str) -> str:
@@ -310,6 +339,7 @@ def event_key(event: dict[str, Any]) -> str:
             "observed_at",
             "event_key",
             "parent_transcript_offset",
+            "expected_runtime",  # Receipt-time configuration is not event identity.
         }
     }
     metrics = normalized.get("metrics")
@@ -1675,14 +1705,6 @@ def coordination_metrics_from_hook_events(
                     metrics[key].update(value)
                 else:
                     metrics[key] = value
-        for key in (
-            "commitment",
-            "ready_transition",
-            "steering_applied",
-            "native_live_status",
-        ):
-            if suffix_metrics.get(key) not in {None, "not_observed"}:
-                metrics[key] = suffix_metrics[key]
 
     # A tool call is one occurrence.  Prefer the pre-hook, but accept a
     # post-only event when a pre-hook was omitted.  UUIDs provide the only
@@ -1860,14 +1882,7 @@ def ingest_hook(payload: dict[str, Any], root: Path) -> None:
             raise ValueError("SubagentStart agent_id equals parent session_id")
         observed_at = utc_now()
         role = bounded(payload.get("agent_type"), 80)
-        expected_runtime = agent_policy.runtime_expectation(
-            AGENT_POLICY, role, observed_at
-        )
-        if expected_runtime is not None:
-            expected_runtime = {
-                **expected_runtime,
-                "source": "agent-team-policy-at-subagent-start",
-            }
+        expected_runtime = capture_role_settings(role, observed_at)
         event = {
             "kind": "subagent_start",
             "observed_at": observed_at,
@@ -2683,7 +2698,7 @@ def locate_child_transcript(agent_id: str, parent_transcript: str | None) -> Pat
             child_time = None
     else:
         child_time = None
-    sessions_root = Path.home() / ".codex" / "sessions"
+    sessions_root = agent_policy.default_codex_home() / "sessions"
     if child_time is not None:
         for day_delta in (-1, 0, 1):
             day = (child_time + timedelta(days=day_delta)).date()
@@ -2976,15 +2991,11 @@ def _role_binding_for_agent(
 
 
 def runtime_resolution_for_agent(
-    role: str | None,
-    started_at: str | None,
     attempts: list[dict[str, Any]],
     observed: dict[str, Any],
     expected_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    expected = expected_override or agent_policy.runtime_expectation(
-        AGENT_POLICY, role, started_at
-    )
+    expected = expected_override
     requested = {
         "model": None,
         "reasoning_effort": None,
@@ -3133,8 +3144,6 @@ def build_agents(
             else None
         )
         runtime_resolution = runtime_resolution_for_agent(
-            actual_role or requested_role,
-            started_at,
             identity_matches,
             observed_runtime,
             expected_runtime_override,
@@ -3377,14 +3386,13 @@ def automatic_anomaly_types(
                 f"{agent['agent_id']} dispatch requested {requested}, observed {observed}"
             )
     for agent in agents:
-        expected = expected_role_runtimes(agent)
+        expected = expected_role_runtime(agent)
         actual = (agent.get("model"), agent.get("reasoning_effort"))
-        if expected and all(actual) and actual not in expected:
-            current = expected[0]
+        if expected and all(actual) and actual != expected:
             types.add("runtime-capability-mismatch")
             evidence.append(
                 f"{agent['agent_id']} {agent['role']} expected "
-                f"{current[0]}/{current[1]}, observed {actual[0]}/{actual[1]}"
+                f"{expected[0]}/{expected[1]}, observed {actual[0]}/{actual[1]}"
             )
         tier_mismatch = service_tier_mismatch(agent)
         if tier_mismatch:
@@ -3671,7 +3679,6 @@ def finalize(
     turn_id: str,
     task_signature_override: str | None,
     summaries: dict[str, str],
-    assessment: dict[str, Any] | None,
     parent_transcript: Path | None,
     dry_run: bool,
     finalization_trigger: str = "manual-cli",
@@ -3755,7 +3762,6 @@ def finalize(
             {
                 "task_signature": task_signature_override,
                 "summaries": summaries,
-                "assessment": assessment,
                 "coordination_metrics": coordination_metrics,
             },
         )
@@ -3847,17 +3853,7 @@ def finalize(
             "agents": agents,
             "spawn_attempts": attempts,
             "coordination_metrics": coordination_metrics,
-            "assessment": assessment,
             "collector": {
-                "lifecycle_policy_version": 1,
-                "child_metric_boundary_version": 1,
-                "zero_yield_policy_version": 1,
-                "delivery_failure_policy_version": 1,
-                "metric_observability_version": 1,
-                "runtime_resolution_version": 1,
-                "effective_authority_version": 1,
-                "metric_snapshot_version": 1,
-                "coordination_telemetry_version": 1,
                 "hook_event_count": len(events),
                 "recovered_event_count": max(0, len(enriched_events) - len(events)),
                 "parent_transcript_bytes_processed": parent_stats["bytes_processed"],
@@ -3877,8 +3873,6 @@ def finalize(
                     if parent_stats["used"]
                     else "hook-events-plus-child-byte-cursors"
                 ),
-                "raw_prompts_stored": False,
-                "raw_messages_stored": False,
                 "coordination_metrics_source": coordination_metrics.get("source"),
             },
         }
@@ -3891,10 +3885,7 @@ def finalize(
                 "summary": "Automatic Codex hook evidence detected: "
                 + ", ".join(anomaly_types),
                 "evidence": "; ".join(anomaly_evidence)[:1600],
-                "impact": (
-                    "The immutable runtime snapshot differs from a normal native-agent "
-                    "closeout and remains explicitly auditable."
-                ),
+                "impact": None,
             }
         if dry_run:
             return {"routine": routine, "anomaly": anomaly, "idempotent": False}
@@ -3942,7 +3933,7 @@ def verified_parent_final_transcript(
     if not transcript.is_file():
         raise ValueError("Stop parent transcript is not readable")
     if root.expanduser().resolve() == DEFAULT_ROOT.expanduser().resolve():
-        sessions_root = (Path.home() / ".codex" / "sessions").resolve()
+        sessions_root = (agent_policy.default_codex_home() / "sessions").resolve()
         if not transcript.is_relative_to(sessions_root):
             raise ValueError("production Stop transcript is outside Codex sessions")
 
@@ -4075,7 +4066,6 @@ def auto_finalize_stop(payload: dict[str, Any], root: Path) -> dict[str, Any]:
         None,
         {},
         None,
-        None,
         True,
         "parent-stop-hook",
     )
@@ -4087,7 +4077,6 @@ def auto_finalize_stop(payload: dict[str, Any], root: Path) -> dict[str, Any]:
         turn_id,
         None,
         {},
-        None,
         None,
         False,
         "parent-stop-hook",
@@ -4130,7 +4119,6 @@ def auto_finalize_late_subagent_stop(
         None,
         {},
         None,
-        None,
         True,
         "parent-stop-hook",
     )
@@ -4142,7 +4130,6 @@ def auto_finalize_late_subagent_stop(
         parent_turn_id,
         None,
         {},
-        None,
         None,
         False,
         "parent-stop-hook",
@@ -4187,11 +4174,6 @@ def parser() -> argparse.ArgumentParser:
     )
     closeout.add_argument("--task-signature")
     closeout.add_argument("--agent-summary", action="append", default=[])
-    closeout.add_argument("--role-fit")
-    closeout.add_argument("--upgrade")
-    closeout.add_argument("--team-value")
-    closeout.add_argument("--evidence")
-    closeout.add_argument("--specialist-candidate")
     closeout.add_argument("--dry-run", action="store_true")
 
     status = commands.add_parser("status", help="Inspect one bounded hook journal.")
@@ -4199,24 +4181,6 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--parent-thread-id", required=True)
     status.add_argument("--turn-id", required=True)
     return result
-
-
-def assessment_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
-    fields = (args.role_fit, args.upgrade, args.team_value, args.evidence)
-    if not any(fields) and not args.specialist_candidate:
-        return None
-    if not all(fields):
-        raise ValueError(
-            "semantic assessment requires --role-fit, --upgrade, --team-value, and --evidence"
-        )
-    return {
-        "source": "parent",
-        "role_fit": bounded(args.role_fit, 80),
-        "upgrade": bounded(args.upgrade, 80),
-        "team_value": bounded(args.team_value, 80),
-        "evidence": bounded(args.evidence, 1200),
-        "specialist_candidate": bounded(args.specialist_candidate, 160),
-    }
 
 
 def main() -> None:
@@ -4260,7 +4224,6 @@ def main() -> None:
             bounded(args.turn_id, 160) or "",
             bounded(args.task_signature, 160),
             parse_keyed(args.agent_summary, "agent summary"),
-            assessment_from_args(args),
             args.parent_transcript,
             args.dry_run,
         )
