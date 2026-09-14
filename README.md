@@ -1,6 +1,6 @@
 # Agent Team
 
-Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文并验收结果。协作配置由用户选择采用，记录 Hooks 可单独启用。主代理验收并整合子代理的结果。
+Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文，并验收、整合子代理的结果。协作配置由用户选择采用。
 
 本仓库提供 Agent Team Skill 及配套配置，可单独安装使用。
 
@@ -14,7 +14,6 @@ Agent Team 帮主代理判断是否值得委派、选择角色、交接上下文
 | [roles/](roles/) | 6 个角色 → `<codex-home>/agents/` |
 | [agent-team-policy.toml](agent-team-policy.toml) | 版本、模型别名、当前目标服务档位与角色文件名映射 → `<codex-home>/agent-team-policy.toml` |
 | [config.fragment.toml](config.fragment.toml) | 合并到 `<codex-home>/config.toml` 的 `[agents]` |
-| [hooks.example.json](hooks.example.json) | 按客户端要求合并到 Hooks 配置 |
 
 由接收方 Codex 检查原生子代理能力、角色发现方式与可用模型，比较已有内容后安装和合并。已有 `[agents]` 时合并键，保留其他配置。安装后可用 `$agent-team` 调用，也可按需加入自己的 `AGENTS.md`。新会话中确认角色识别，并在真实委派时核对所用模型、权限与结果。
 
@@ -61,18 +60,9 @@ multi_agent_v2 = { enabled = true, min_wait_timeout_ms = 300000, default_wait_ti
 
 GPT-5.6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与子代理使用什么模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
 
-## 自选：记录 Hooks
+## 会话审计
 
-脚本要求 Python 3.11+，记录器使用 `fcntl`，面向 macOS/Linux；Windows 原生环境由接收方 Codex 根据本机环境适配路径、Shell 和文件锁，并验证实际运行结果。
-
-示例包含 `PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop`、`Stop`，记录委派与生命周期。采用时：
-
-1. 核对客户端支持的事件、格式、加载位置和信任方式。
-2. 合并示例条目，保留其他 Hooks，避免重复安装记录器。
-3. 确认 Hook 进程可调用 `python3`，并能正确解析安装目录和策略；自定义 `CODEX_HOME` 须在该进程生效。示例使用 POSIX Shell，路径引用需保留。
-4. 在实际委派后检查 `~/.codex/agent-team-records/`。目录选项见[记录说明](skill/references/field-recording.md#storage-and-identity)；事件或字段缺失时按缺失处理。
-
-记录器会读取相关会话片段，输出含会话标识、工作目录等信息，保留在本机。维护采集器或补录时读 [记录说明](skill/references/field-recording.md)。
+历史执行与子代理复盘由 [codex-session-audit](https://github.com/zakuro-lab/zakuro-skills/tree/main/skills/codex-session-audit) 提供，可另行安装。主 Skill 提供原生会话与父子关系查询，`skills/agent-team-audit/` 子 Skill 负责审计委派与交付，以及比较模型和推理强度。Agent Team 的日常协作不依赖审计 Skill。
 
 ## 工具与排障
 
@@ -80,25 +70,18 @@ GPT-5.6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时�
 | --- | --- |
 | `agent_policy.py` | 读写策略 |
 | `agent_speed.py` | 查看、调整服务档位 |
-| `read_thread_once.py` | 经 `codex app-server --stdio` 读取选定任务 |
-| `record_hook.py` | 采集 Hook 事件 |
-| `record_closeout.py` | 整理、修正和复核记录 |
-| `record_common.py` | 两个记录入口共用的解析与分类函数；随脚本一起安装，不单独运行 |
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" status
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/validate_agent_team.py"
 ```
 
-`agent_speed.py status` 显示模型服务档位及角色档位是否匹配；`validate_agent_team.py` 检查角色文件、当前策略和服务档位。模型／推理字段需按上节核对，账号权限、运行时隔离与 Hooks 需实际运行验证。
-
-记录命令和诊断命令的 `--root` 用法见[记录说明](skill/references/field-recording.md#storage-and-identity)。
+`agent_speed.py status` 显示模型服务档位及角色档位是否匹配；`validate_agent_team.py` 检查角色文件、当前策略和服务档位。模型／推理字段需按上节核对，账号权限和运行时隔离需实际运行验证。
 
 | 现象 | 检查方向 |
 | --- | --- |
 | 找不到角色 | Codex home、角色发现规则、文件格式与原生子代理能力 |
 | 模型不可用 | 账号权限、模型名与推理强度；同步角色和策略 |
 | 角色配置不一致 | 角色 TOML、策略中的文件名映射，以及模型对应的目标档位 |
-| Hook 没有记录 | 信任、事件触发、Python、路径与实际记录 |
 
-更新时比较仓库与本机修改；客户端升级后核对配置字段和事件。停用记录只移除对应 Hook 条目，保留已有记录和其他 Hooks。
+更新时比较仓库与本机修改，保留用户的其他配置。

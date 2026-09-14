@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
     print(f"PASS: {count} managed role profiles and current service tiers checked.")
-    print("Scope: static configuration only; model access, effective permissions, Hook delivery, "
+    print("Scope: static configuration only; model access, effective permissions, "
           "and delegation behavior require runtime evidence.")
     return 0
 

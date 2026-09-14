@@ -13,17 +13,13 @@ or configuration validation. Ordinary delegation follows the main Skill.
 | `roles/*.toml` | `<codex-home>/agents/` |
 | `agent-team-policy.toml` | `<codex-home>/agent-team-policy.toml` |
 | `config.fragment.toml` | Merge into `<codex-home>/config.toml` |
-| `hooks.example.json` | Optional: merge into the client's supported Hooks configuration |
 
 Check the receiving client's role discovery, supported settings, and available models.
 Compare existing files before replacing them; merge configuration keys and preserve unrelated
 settings. Verify role recognition in a new session and actual model, permissions, and results
 when delegation runs. Follow the user's selected installation or update scope.
 
-The scripts require Python 3.11 or newer. Recording uses POSIX `fcntl`; native Windows setup
-requires adapting paths, shell commands, and locking to the receiving environment and validating
-that behavior. See [field-recording.md](field-recording.md) for optional recording Hooks and
-record-root rules.
+The scripts require Python 3.11 or newer.
 
 ## Role and permission settings
 
@@ -67,5 +63,4 @@ python3 scripts/validate_agent_team.py
 ```
 
 Use `--codex-home <path>` with `validate_agent_team.py` to inspect another installation. These
-commands are read-only. Read [field-recording.md](field-recording.md) for recorder maintenance,
-diagnostics, and historical audits.
+commands are read-only.

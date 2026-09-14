@@ -76,12 +76,6 @@ Keep delegation one level deep and explicitly prohibit further delegation
 in each child assignment. Reuse the child for related follow-ups so useful
 task context survives.
 
-For historical task evidence, use child-visible `read_thread`, or the
-included `scripts/read_thread_once.py` through its absolute path:
-`metadata`, then bounded `turns` pages using `nextCursor`. Parent relay
-is a fallback after both providers fail or when the user requests it;
-identify that evidence as parent-assisted, not independently retrieved.
-
 ## Coordinate execution
 
 Continue independent work while children run. When no independent work
@@ -160,7 +154,5 @@ Read these only for the corresponding request:
 
 - [configuration.md](references/configuration.md): installation, role
   settings, runtime permissions, service tiers, and configuration validation.
-- [field-recording.md](references/field-recording.md): recording Hooks,
-  record maintenance, privacy, and historical audits.
 - [professional-agents.md](references/professional-agents.md): creating
   or evaluating recurring project specialists.
