@@ -11,7 +11,7 @@ sandbox_mode = "read-only"
 model_reasoning_effort = "high"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"
-model_auto_compact_token_limit = 250000
+model_auto_compact_token_limit = 700000
 model_auto_compact_token_limit_scope = "total"
 
 developer_instructions = """

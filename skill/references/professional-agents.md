@@ -4,7 +4,8 @@ A professional agent is a durable operating unit, not a character description. I
 
 ## Promotion Test
 
-Create a named specialist only when all of these are true:
+Begin with the available generic roles. Create a named specialist only when
+all of these are true:
 
 1. **Recurring job:** the lane appears across multiple tasks or project phases.
 2. **Distinct capability:** it needs a particular Skill, MCP server, command set, data source, sandbox, or project knowledge.
@@ -34,7 +35,7 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 3. Start with the cheapest model that passes those tasks. Do not infer model class from the prestige of the job title.
 4. Configure a project-scoped agent with concrete instructions and least necessary sandbox access.
 5. Run smoke cases and compare it with the generic `explorer` or `default` on correctness, intervention rate, latency, and cost.
-6. Keep it only when the specialist produces a stable advantage. Otherwise improve the calling Skill or context capsule.
+6. Keep specialists close to the projects whose capabilities they use. Retain them only while they show a stable advantage; otherwise retire them and improve the calling Skill or task context.
 
 ## Useful Team Shapes
 
@@ -47,9 +48,3 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 Add a reviewer or verifier only when it has an independent acceptance surface. Give it a compact
 evidence capsule and disputed claims; a second agent rereading the same full context with the same
 tools is not automatically useful independence.
-
-## Avoid Catalog Inflation
-
-Do not pre-create agents for every technology or job title. Begin with the six generic roles.
-Promote a specialist from repeated evidence, keep it close to the project whose capabilities it
-uses, and retire it when its distinction disappears.
