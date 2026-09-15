@@ -24,5 +24,8 @@ filename = "reviewer.toml"
 [roles."worker"]
 filename = "worker.toml"
 
+[roles."worker_max"]
+filename = "worker-max.toml"
+
 [roles."sol_xhigh"]
 filename = "sol-xhigh.toml"

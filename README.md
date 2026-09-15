@@ -11,7 +11,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 | 来源 | 用途与目标位置 |
 | --- | --- |
 | [skill/](skill/) | 方法、参考与脚本 → `<codex-home>/skills/agent-team/` |
-| [roles/](roles/) | 6 个角色 → `<codex-home>/agents/` |
+| [roles/](roles/) | 7 个角色 → `<codex-home>/agents/` |
 | [agent-team-policy.toml](agent-team-policy.toml) | 版本、模型别名、当前目标服务档位与角色文件名映射 → `<codex-home>/agent-team-policy.toml` |
 | [config.fragment.toml](config.fragment.toml) | 合并到 `<codex-home>/config.toml` 的 `[agents]` |
 
@@ -27,6 +27,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 | `explorer` | 只读检索与证据发现 | Luna / high |
 | `reviewer` | 独立只读审查 | Luna / high |
 | `worker` | 同类执行任务需要更多推理时使用，可直接选择 | Luna / xhigh |
+| `worker_max` | 与 worker 相同；仅用户明确指定本次委派使用 worker_max 或 Luna/max 时选择 | Luna / max |
 | `monitor` | 持续观察已运行目标 | Luna / medium |
 | `sol_xhigh` | 处理语义冲突、竞争解释等难题 | Sol / xhigh |
 
@@ -44,13 +45,13 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 
 ## Luna 的上下文与自动压缩
 
-本次配置只提高 **`gpt-5.6-luna`** 的上下文和自动压缩阈值，适用于五个 Luna 角色：`default`、`explorer`、`monitor`、`reviewer`、`worker`。模型目录按模型生效，同一安装中使用 Luna 的主任务也会采用该设置。
+本次配置只提高 **`gpt-5.6-luna`** 的上下文和自动压缩阈值，适用于六个 Luna 角色：`default`、`explorer`、`monitor`、`reviewer`、`worker`、`worker_max`。模型目录按模型生效，同一安装中使用 Luna 的主任务也会采用该设置。
 
 | 配置项 | Luna | 其他模型 |
 | --- | --- | --- |
 | 模型目录的 `context_window` | `872000` | 保留原值；本机为 `272000` |
 | 模型目录的 `auto_compact_token_limit` | `700000` | 保留原压缩配置；本机为 `250000` |
-| 角色 `model_auto_compact_token_limit` | 五个 Luna 角色均为 `700000` | Sol 角色保持 `250000` |
+| 角色 `model_auto_compact_token_limit` | 六个 Luna 角色均为 `700000` | Sol 角色保持 `250000` |
 | `model_auto_compact_token_limit_scope` | `total` | 保持原设置；本机同为 `total` |
 
 本机目录的 `effective_context_window_percent` 为 `95`，因此 Luna 折算的可用上下文为 **828,400 tokens**；`872000` 是配置窗口，`700000` 是自动压缩阈值，两者含义不同。
@@ -67,7 +68,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
    ```
 
    根级 `model_auto_compact_token_limit` 会覆盖模型目录中的值。本次先将原来的 `250000` 保留到其他模型条目的 `auto_compact_token_limit`，再移除根级阈值。接收机器应保留自己的原值，不能把所有模型一并改成 `700000`。同样，不要用根级 `model_context_window = 872000` 来实现仅调整 Luna。
-4. 安装本仓库的角色文件。五个 Luna 角色已包含：
+4. 安装本仓库的角色文件。六个 Luna 角色已包含：
 
    ```toml
    model_auto_compact_token_limit = 700000

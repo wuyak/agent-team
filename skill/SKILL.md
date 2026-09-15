@@ -46,6 +46,9 @@ selection boundaries are:
 - `default` owns bounded execution.
 - `worker` owns execution that warrants additional reasoning effort. Choose
   it directly without requiring a failed `default` attempt.
+- `worker_max` has the same execution responsibilities as `worker`. Select it
+  only when the user explicitly requests `worker_max` or Luna/max for this
+  delegation. Do not select it autonomously based on task difficulty.
 - `explorer` gathers evidence; `reviewer` independently examines a defined
   claim or artifact. Diagnosis, reproduction, and repair need execution roles.
 - `sol_xhigh` fits evidenced semantic conflicts, competing causal explanations,
