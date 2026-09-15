@@ -6,7 +6,7 @@ or ongoing monitoring.
 """
 model = "gpt-5.6-luna"
 service_tier = "default"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"
 model_auto_compact_token_limit = 700000

@@ -23,10 +23,10 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 
 | 角色 | 职责 | 当前模型／推理强度 |
 | --- | --- | --- |
-| `default` | 默认承担范围明确的通用与工程任务 | Luna / xhigh |
+| `default` | 默认承担范围明确的通用与工程任务 | Luna / high |
 | `explorer` | 只读检索与证据发现 | Luna / high |
 | `reviewer` | 独立只读审查 | Luna / high |
-| `worker` | 同类执行任务需要更多推理时使用，可直接选择 | Luna / max |
+| `worker` | 同类执行任务需要更多推理时使用，可直接选择 | Luna / xhigh |
 | `monitor` | 持续观察已运行目标 | Luna / medium |
 | `sol_xhigh` | 处理语义冲突、竞争解释等难题 | Sol / xhigh |
 
