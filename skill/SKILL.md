@@ -124,11 +124,19 @@ Use native collaboration tools and the identifiers they accept. Use
 `send_message` for information and `followup_task` when work must start or
 resume. Judge whether instructions were applied from the resulting work,
 substantive reply, or final delivery; a delivery receipt does not require an
-acknowledgment exchange. When no independent work remains, use the child-wait
-tool (`wait_agent` where available) with its default timeout. An unchanged timeout leads to
-continued waiting, not another query or message. Use `list_agents` to resolve
-contradictory state, answer an explicit status request, or make a capacity
-decision.
+acknowledgment exchange. Use `list_agents` to resolve contradictory state,
+answer an explicit status request, or make a capacity decision.
+
+Use the native child-wait tool (`wait_agent` where available) with its
+configured default timeout in these two cases:
+
+- **Waiting for a specific child:** When the parent needs a particular child's
+  result to continue, identify that child and the required result, then use the
+  native wait tool without repeatedly querying status or sending confirmation
+  messages. Resume the original task when the result is usable.
+- **No parent work:** When no necessary independent work remains, directly use
+  the native wait tool to suspend model execution, without looking for extra
+  work to do. If the wait times out without a new development, continue waiting.
 
 Keep enough working state to know the owners, outstanding handoffs, and next
 actions. Existing task context is sufficient unless its loss would impede
