@@ -80,13 +80,13 @@ class AgentSpeedTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             policy = agent_policy.load_policy(home)
             self.assertEqual(
-                policy["models"]["gpt-5.6-luna"]["service_tier"], "fast"
+                policy["models"]["gpt-6-luna"]["service_tier"], "fast"
             )
             for role, profile_settings in agent_policy.load_profiles(policy, home).items():
                 profile = (home / "agents" / policy["roles"][role]["filename"]).read_text(
                     encoding="utf-8"
                 )
-                if profile_settings["model"] == "gpt-5.6-luna":
+                if profile_settings["model"] == "gpt-6-luna":
                     self.assertIn('service_tier = "fast"', profile, role)
             self.assertEqual(sol_path.read_bytes(), sol_before)
 

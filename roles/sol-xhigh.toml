@@ -4,7 +4,7 @@ Deeper reasoning for evidenced semantic conflicts, competing causal explanations
 cross-module interpretation problems. Use when the assignment requires this reasoning;
 prior attempts by other roles are not a prerequisite.
 """
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 service_tier = "default"
 sandbox_mode = "workspace-write"
 

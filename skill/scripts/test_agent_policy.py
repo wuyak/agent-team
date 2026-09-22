@@ -15,8 +15,8 @@ def build_test_policy():
     return {
         "version": 1,
         "models": {
-            "gpt-5.6-luna": {"alias": "luna", "service_tier": "standard"},
-            "gpt-5.6-sol": {"alias": "sol", "service_tier": "standard"},
+            "gpt-6-luna": {"alias": "luna", "service_tier": "standard"},
+            "gpt-6-sol": {"alias": "sol", "service_tier": "standard"},
         },
         "roles": {name: {"filename": filename} for name, filename in (
             ("default", "default.toml"), ("worker", "worker.toml"), ("sol_xhigh", "sol-xhigh.toml"))},
@@ -32,7 +32,7 @@ def make_test_home(directory):
     for role, model, effort in (("default", "luna", "xhigh"), ("worker", "luna", "max"),
                                 ("sol_xhigh", "sol", "xhigh")):
         (home / "agents" / policy["roles"][role]["filename"]).write_text(
-            f'name = "{role}"\nmodel = "gpt-5.6-{model}"\nmodel_reasoning_effort = "{effort}"\n'
+            f'name = "{role}"\nmodel = "gpt-6-{model}"\nmodel_reasoning_effort = "{effort}"\n'
             'service_tier = "default"\ndescription = "A useful role"\n'
             'developer_instructions = "Complete the assigned task."\n')
     return home
@@ -43,7 +43,7 @@ class AgentPolicyTests(unittest.TestCase):
         policy = build_test_policy()
         updated, model, changed = agent_policy.update_model_tier(policy, 'LUNA', 'fast')
         self.assertTrue(changed)
-        self.assertEqual(model, 'gpt-5.6-luna')
+        self.assertEqual(model, 'gpt-6-luna')
         self.assertEqual(policy['models'][model]['service_tier'], 'standard')
         self.assertEqual(set(updated), {'version', 'models', 'roles'})
         with tempfile.TemporaryDirectory() as directory:
@@ -56,8 +56,8 @@ class AgentPolicyTests(unittest.TestCase):
         for change in ('tier', 'alias', 'filename'):
             with self.subTest(change=change):
                 policy = copy.deepcopy(build_test_policy())
-                if change == 'tier': policy['models']['gpt-5.6-luna']['service_tier'] = 'invalid'
-                if change == 'alias': policy['models']['gpt-5.6-sol']['alias'] = 'luna'
+                if change == 'tier': policy['models']['gpt-6-luna']['service_tier'] = 'invalid'
+                if change == 'alias': policy['models']['gpt-6-sol']['alias'] = 'luna'
                 if change == 'filename': policy['roles']['worker']['filename'] = '../worker.toml'
                 with self.assertRaises(agent_policy.PolicyError): agent_policy.validate_policy(policy)
 

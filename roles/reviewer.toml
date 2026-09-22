@@ -4,7 +4,7 @@ Independently examine a specific claim, approach, change, or artifact against re
 counterexamples, and evidence gaps. Use for a defined read-only review question; ordinary
 retrieval and execution belong to other roles.
 """
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 service_tier = "default"
 sandbox_mode = "read-only"
 

@@ -45,7 +45,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 
 ## Luna 的上下文与自动压缩
 
-本次配置只提高 **`gpt-5.6-luna`** 的上下文和自动压缩阈值，适用于六个 Luna 角色：`default`、`explorer`、`monitor`、`reviewer`、`worker`、`worker_max`。模型目录按模型生效，同一安装中使用 Luna 的主任务也会采用该设置。
+本次配置只提高 **`gpt-6-luna`** 的上下文和自动压缩阈值，适用于六个 Luna 角色：`default`、`explorer`、`monitor`、`reviewer`、`worker`、`worker_max`。模型目录按模型生效，同一安装中使用 Luna 的主任务也会采用该设置。
 
 | 配置项 | Luna | 其他模型 |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 ### 配置模型目录与角色
 
 1. 从接收机器当前的 `<codex-home>/models_cache.json` 复制完整 `models` 数组，保存为 `<codex-home>/model-catalogs/luna-context.json`，顶层结构为 `{"models": [...]}`。已有自定义目录时先合并既有修改。`model_catalog_json` 加载的是完整目录，不能只保存 Luna 一条，也不能省略模型条目的其他字段；本仓库不分发作者机器的模型目录快照。
-2. 在 `slug = "gpt-5.6-luna"` 的条目中设置 `context_window = 872000`、`auto_compact_token_limit = 700000`，其余字段保留。先确认接收方目录支持该窗口；本机 Luna 的 `max_context_window` 为 `872000`。其他模型保留原来的窗口与压缩行为。
+2. 在 `slug = "gpt-6-luna"` 的条目中设置 `context_window = 872000`、`auto_compact_token_limit = 700000`，其余字段保留。先确认接收方目录支持该窗口；本机 Luna 的 `max_context_window` 为 `872000`。其他模型保留原来的窗口与压缩行为。
 3. 在 `<codex-home>/config.toml` 的**根级**合并以下设置，放在 `[agents]` 等表头之前，并替换为接收机器的绝对路径：
 
    ```toml
@@ -99,7 +99,7 @@ multi_agent_v2 = { enabled = true, min_wait_timeout_ms = 300000, default_wait_ti
 - 最短和默认等待 **5 分钟**：减少没有新消息时的超时唤醒。
 - 最大等待 **1 小时**：允许显式请求更长等待，默认仍为 5 分钟。
 
-GPT-5.6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与子代理使用什么模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
+GPT-6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与子代理使用什么模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
 
 ## 会话审计
 
