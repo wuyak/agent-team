@@ -4,7 +4,7 @@ Execute bounded general-purpose and engineering tasks with the same responsibili
 Select only when the user explicitly requests worker_max or Luna/max for this delegation.
 Do not select it autonomously based on task difficulty.
 """
-model = "gpt-6-luna"
+model = "gpt-5.6-luna"
 service_tier = "default"
 sandbox_mode = "workspace-write"
 

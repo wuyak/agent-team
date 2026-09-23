@@ -3,7 +3,7 @@ description = """
 Observe an existing long-running command, process, task, or terminal target when repeated interpreted
 observation is needed; never use this role for a single ordinary wait or to watch child agents.
 """
-model = "gpt-6-luna"
+model = "gpt-5.6-luna"
 service_tier = "default"
 sandbox_mode = "read-only"
 

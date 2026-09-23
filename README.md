@@ -21,6 +21,8 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 
 当前配置可按接收方可用模型调整：
 
+仓库模板默认使用 `gpt-5.6-luna` 和 `gpt-5.6-sol`。安装后可用下节的模型脚本在 GPT-5.6 与 GPT-6 之间切换。
+
 | 角色 | 职责 | 当前模型／推理强度 |
 | --- | --- | --- |
 | `default` | 默认承担范围明确的通用与工程任务 | Luna / high |
@@ -43,9 +45,34 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 - 策略 `models` 的模型、别名和当前目标服务档位，以及全局默认子代理配置。
 - 普通服务档位在策略中为 `standard`，角色文件中为 `default`；Fast 需账号和客户端支持，并核对相关 feature。
 
+## 切换子代理模型版本
+
+`agent_model.py` 统一切换已安装的 Agent Team 配置。无参数运行时，脚本会显示当前版本，列出可选版本，并在写入前展示差异、等待确认：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py"
+```
+
+也可以显式查看或指定目标版本：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" status
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" set 5.6
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" set gpt-6 --dry-run
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" set 6 --yes
+```
+
+`5.6`、`gpt-5.6`、`6` 和 `gpt-6` 都按模型代际解释。脚本只修改以下模型字段：
+
+- `<codex-home>/config.toml` 中的 `[agents].default_subagent_model`。
+- 策略管理的角色 TOML 中的 `model`。
+- `<codex-home>/agent-team-policy.toml` 中 Luna、Sol 两个模型表名。
+
+主代理模型、推理强度、服务档位、权限、上下文和压缩设置不会随切换改变。发现已知版本混用时，脚本会显示警告和具体差异，用户确认后仍可统一切换。每个文件使用原子替换；中途失败时，脚本用写入前读到的内容回滚，不生成持久备份文件。已有会话不会因此改用新模型，请在新的任务中确认实际子代理模型。
+
 ## Luna 的上下文与自动压缩
 
-本次配置只提高 **`gpt-6-luna`** 的上下文和自动压缩阈值，适用于六个 Luna 角色：`default`、`explorer`、`monitor`、`reviewer`、`worker`、`worker_max`。模型目录按模型生效，同一安装中使用 Luna 的主任务也会采用该设置。
+六个 Luna 角色 `default`、`explorer`、`monitor`、`reviewer`、`worker`、`worker_max` 使用扩展后的上下文和自动压缩阈值。仓库模板默认使用 **`gpt-5.6-luna`**；切换到 GPT-6 后，对应模型为 **`gpt-6-luna`**。模型目录按完整模型名生效，同一安装中使用相应 Luna 模型的主任务也会采用该设置。
 
 | 配置项 | Luna | 其他模型 |
 | --- | --- | --- |
@@ -59,7 +86,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 ### 配置模型目录与角色
 
 1. 从接收机器当前的 `<codex-home>/models_cache.json` 复制完整 `models` 数组，保存为 `<codex-home>/model-catalogs/luna-context.json`，顶层结构为 `{"models": [...]}`。已有自定义目录时先合并既有修改。`model_catalog_json` 加载的是完整目录，不能只保存 Luna 一条，也不能省略模型条目的其他字段；本仓库不分发作者机器的模型目录快照。
-2. 在 `slug = "gpt-6-luna"` 的条目中设置 `context_window = 872000`、`auto_compact_token_limit = 700000`，其余字段保留。先确认接收方目录支持该窗口；本机 Luna 的 `max_context_window` 为 `872000`。其他模型保留原来的窗口与压缩行为。
+2. 在准备使用的 Luna 条目中设置 `context_window = 872000`、`auto_compact_token_limit = 700000`，其余字段保留。仓库默认版本对应 `slug = "gpt-5.6-luna"`；若还要切换到 GPT-6，也要为 `slug = "gpt-6-luna"` 配置相同数值。模型切换脚本不会修改模型目录。先确认接收方目录支持该窗口；本机这两代 Luna 的 `max_context_window` 均为 `872000`。其他模型保留原来的窗口与压缩行为。
 3. 在 `<codex-home>/config.toml` 的**根级**合并以下设置，放在 `[agents]` 等表头之前，并替换为接收机器的绝对路径：
 
    ```toml
@@ -99,7 +126,7 @@ multi_agent_v2 = { enabled = true, min_wait_timeout_ms = 300000, default_wait_ti
 - 最短和默认等待 **5 分钟**：减少没有新消息时的超时唤醒。
 - 最大等待 **1 小时**：允许显式请求更长等待，默认仍为 5 分钟。
 
-GPT-6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与子代理使用什么模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
+主代理使用 v2 版 `wait_agent` 时，适用以上超时设置，与主代理或子代理选择哪一代模型无关。配置已在 Codex 0.153.4 验证，字段见[官方配置 schema](https://learn.chatgpt.com/docs/config-schema.json)。
 
 ## 会话审计
 
@@ -110,14 +137,16 @@ GPT-6（非 Luna）、GPT-6 Astra 等主代理使用 v2 版 `wait_agent` 时，�
 | 脚本 | 用途 |
 | --- | --- |
 | `agent_policy.py` | 读写策略 |
+| `agent_model.py` | 查看、切换受管子代理的模型版本 |
 | `agent_speed.py` | 查看、调整服务档位 |
 
 ```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" status
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" status
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/validate_agent_team.py"
 ```
 
-`agent_speed.py status` 显示模型服务档位及角色档位是否匹配；`validate_agent_team.py` 检查角色文件、当前策略和服务档位。模型／推理字段需按上节核对，账号权限和运行时隔离需实际运行验证。
+`agent_model.py status` 显示当前模型版本及各个受管字段；`agent_speed.py status` 显示模型服务档位及角色档位是否匹配；`validate_agent_team.py` 检查角色文件、当前策略和服务档位。账号权限和运行时隔离仍需实际运行验证。
 
 | 现象 | 检查方向 |
 | --- | --- |

@@ -1,11 +1,11 @@
 # Managed role files and current service tiers.
 version = 1
 
-[models."gpt-6-luna"]
+[models."gpt-5.6-luna"]
 alias = "luna"
 service_tier = "standard"
 
-[models."gpt-6-sol"]
+[models."gpt-5.6-sol"]
 alias = "sol"
 service_tier = "standard"
 

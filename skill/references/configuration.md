@@ -1,7 +1,7 @@
 # Configuration and maintenance
 
-Use this reference for installation, role or permission settings, service-tier changes,
-or configuration validation. Ordinary delegation follows the main Skill.
+Use this reference for installation, role or permission settings, model-profile or service-tier
+changes, and configuration validation. Ordinary delegation follows the main Skill.
 
 ## Install or update
 
@@ -37,6 +37,35 @@ Verify effective permissions rather than inferring isolation from a role declara
 Choose `fork_turns` in the spawn call, not in role TOMLs. Use the main Skill's context rules.
 For a new recurring specialist, read [professional-agents.md](professional-agents.md).
 
+## Change model profiles
+
+Use the model controller to switch every managed subagent between supported model generations.
+It updates only the model values in the installed `config.toml`, managed role TOMLs, and
+`agent-team-policy.toml`; reasoning effort, permissions, service tiers, context settings, and
+other configuration remain unchanged.
+
+From the installed Skill directory, run the controller without arguments to inspect the current
+profile and choose a target interactively:
+
+```bash
+python3 scripts/agent_model.py
+```
+
+For explicit or automated use:
+
+```bash
+python3 scripts/agent_model.py status
+python3 scripts/agent_model.py set 5.6
+python3 scripts/agent_model.py set gpt-6 --dry-run
+python3 scripts/agent_model.py set 6 --yes
+```
+
+Short profile names such as `5.6` and `6` are semantic aliases for their complete GPT model
+generations. Before writing, the controller prints every model-field change and asks for
+confirmation; `--yes` is the explicit non-interactive confirmation. A known mixed-generation
+installation is reported and can be converged after confirmation. Writes are validated and rolled
+back in memory on failure; the controller does not create persistent backup files.
+
 ## Change service tiers
 
 `agent-team-policy.toml` is authoritative for managed tiers. Use the controller to update matching
@@ -58,6 +87,7 @@ Fast requires client and account support. Report the model family changed and re
 Inspect the current service tiers and role files from the installed Skill directory:
 
 ```bash
+python3 scripts/agent_model.py status
 python3 scripts/agent_speed.py status
 python3 scripts/validate_agent_team.py
 ```
