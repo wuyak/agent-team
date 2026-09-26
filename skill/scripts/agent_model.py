@@ -169,6 +169,8 @@ def inspect_installation(codex_home: Path) -> InstallationState:
         profile = parse_toml(path, content)
         if profile.get("name") != role:
             raise PolicyError(f"{path}: expected role name {role!r}")
+        if "service_tier" in profile:
+            raise PolicyError(f"{path}: remove role service_tier; use global config.toml")
         model = profile.get("model")
         ref = model_ref(model)
         if model not in policy["models"]:

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Current service-tier policy and installed role profiles."""
+"""Managed model aliases and installed role profiles; tiers live in global config."""
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import tomllib
@@ -12,12 +11,6 @@ from typing import Any
 
 
 POLICY_FILENAME = "agent-team-policy.toml"
-VALID_TIERS = {"fast", "standard"}
-TIER_ALIASES = {
-    "fast": {"fast", "priority"},
-    "standard": {"default", "standard"},
-}
-PROFILE_TIER_VALUES = {"fast": "fast", "standard": "default"}
 
 
 class PolicyError(ValueError):
@@ -40,25 +33,6 @@ def read_toml(path: Path) -> dict[str, Any]:
         raise PolicyError(f"cannot load {path}: {error}") from error
 
 
-def canonical_tier(value: Any) -> str:
-    if not isinstance(value, str):
-        raise PolicyError("service tier must be fast or standard")
-    normalized = value.strip().lower()
-    if normalized == "default":
-        normalized = "standard"
-    if normalized not in VALID_TIERS:
-        raise PolicyError(f"unsupported service tier: {value}")
-    return normalized
-
-
-def profile_tier_value(tier: str) -> str:
-    return PROFILE_TIER_VALUES[canonical_tier(tier)]
-
-
-def tier_aliases(tier: str) -> set[str]:
-    return set(TIER_ALIASES[canonical_tier(tier)])
-
-
 def _require_mapping(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict) or not value:
         raise PolicyError(f"{field} must be a non-empty table")
@@ -66,8 +40,10 @@ def _require_mapping(value: Any, field: str) -> dict[str, Any]:
 
 
 def validate_policy(policy: dict[str, Any]) -> None:
-    if policy.get("version") != 1:
-        raise PolicyError("policy version must be 1")
+    if policy.get("version") != 2:
+        raise PolicyError("policy version must be 2 (remove model and role service tiers)")
+    if "service_tier" in policy:
+        raise PolicyError("configure service_tier only in global config.toml")
     aliases: set[str] = set()
     for model, spec in _require_mapping(policy.get("models"), "models").items():
         spec = _require_mapping(spec, f"models.{model}")
@@ -78,10 +54,13 @@ def validate_policy(policy: dict[str, Any]) -> None:
         if alias in aliases:
             raise PolicyError(f"duplicate model alias: {alias}")
         aliases.add(alias)
-        canonical_tier(spec.get("service_tier"))
+        if "service_tier" in spec:
+            raise PolicyError(f"models.{model}: configure service_tier only in global config.toml")
     filenames: set[str] = set()
     for role, spec in _require_mapping(policy.get("roles"), "roles").items():
         spec = _require_mapping(spec, f"roles.{role}")
+        if "service_tier" in spec:
+            raise PolicyError(f"roles.{role}: configure service_tier only in global config.toml")
         filename = spec.get("filename")
         if (not role or not isinstance(filename, str)
                 or not filename.endswith(".toml") or Path(filename).name != filename):
@@ -108,43 +87,19 @@ def load_profiles(policy: dict[str, Any], codex_home: Path) -> dict[str, dict[st
             raise PolicyError(f"{path}: expected role name {role!r}")
         model = profile.get("model")
         if not isinstance(model, str) or model not in policy["models"]:
-            raise PolicyError(f"{path}: model is not in the managed tier policy")
+            raise PolicyError(f"{path}: model is not in the managed model policy")
+        if "service_tier" in profile:
+            raise PolicyError(f"{path}: remove role service_tier; use global config.toml")
         profiles[role] = profile
     return profiles
-
-
-def resolve_model(policy: dict[str, Any], target: str) -> str:
-    normalized = target.strip().lower()
-    for model, spec in policy["models"].items():
-        if normalized in {model.lower(), str(spec["alias"]).lower()}:
-            return model
-    raise PolicyError(f"unknown managed model or alias: {target}")
-
-
-def policy_requires_fast_mode(policy: dict[str, Any]) -> bool:
-    return any(canonical_tier(spec["service_tier"]) == "fast"
-               for spec in policy["models"].values())
-
-
-def update_model_tier(
-    policy: dict[str, Any], target: str, tier: str
-) -> tuple[dict[str, Any], str, bool]:
-    validate_policy(policy)
-    model = resolve_model(policy, target)
-    normalized = canonical_tier(tier)
-    updated = copy.deepcopy(policy)
-    changed = canonical_tier(policy["models"][model]["service_tier"]) != normalized
-    updated["models"][model]["service_tier"] = normalized
-    return updated, model, changed
 
 
 def render_policy(policy: dict[str, Any]) -> str:
     validate_policy(policy)
     quoted = lambda value: json.dumps(value, ensure_ascii=False)
-    lines = ["# Managed role files and current service tiers.", f"version = {policy['version']}", ""]
+    lines = ["# Managed model aliases and role files. Service tier lives in global config.toml.", f"version = {policy['version']}", ""]
     for model, spec in policy["models"].items():
-        lines.extend([f"[models.{quoted(model)}]", f"alias = {quoted(spec['alias'])}",
-                      f"service_tier = {quoted(canonical_tier(spec['service_tier']))}", ""])
+        lines.extend([f"[models.{quoted(model)}]", f"alias = {quoted(spec['alias'])}", ""])
     for role, spec in policy["roles"].items():
         lines.extend([f"[roles.{quoted(role)}]", f"filename = {quoted(spec['filename'])}", ""])
     return "\n".join(lines).rstrip() + "\n"

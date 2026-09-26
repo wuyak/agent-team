@@ -5,7 +5,6 @@ cross-module interpretation problems. Use when the assignment requires this reas
 prior attempts by other roles are not a prerequisite.
 """
 model = "gpt-5.6-sol"
-service_tier = "default"
 sandbox_mode = "workspace-write"
 
 model_reasoning_effort = "xhigh"

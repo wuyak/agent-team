@@ -5,7 +5,6 @@ tests, or current web/API material. Use for bounded read-only information gather
 not root-cause diagnosis, reproduction, or repair.
 """
 model = "gpt-5.6-luna"
-service_tier = "default"
 sandbox_mode = "read-only"
 
 model_reasoning_effort = "high"

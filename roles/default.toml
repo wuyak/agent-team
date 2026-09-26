@@ -5,7 +5,6 @@ and complete the assignment. Use a matching specialist for retrieval, independen
 or ongoing monitoring.
 """
 model = "gpt-5.6-luna"
-service_tier = "default"
 model_reasoning_effort = "high"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"

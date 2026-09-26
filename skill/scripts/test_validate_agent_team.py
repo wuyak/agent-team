@@ -1,4 +1,4 @@
-"""Check only the inputs needed to load managed roles and inspect their tiers."""
+"""Check managed roles and global configuration without runtime claims."""
 import contextlib
 import io
 from pathlib import Path
@@ -30,7 +30,7 @@ class ValidatorTests(unittest.TestCase):
         (self.home / 'config.toml').unlink()
         (self.home / 'hooks.json').write_text('{broken recorder json')
         (self.home / 'agents/unmanaged.toml').write_text('invalid = [')
-        self.role.write_text(self.original.replace('"max"', '"high"') + 'sandbox_mode = "read-only"\n')
+        self.role.write_text(self.original.replace('"xhigh"', '"high"') + 'sandbox_mode = "read-only"\n')
         before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
         code, out, err = self.run_check()
         self.assertEqual(code, 0, err)
@@ -46,8 +46,8 @@ class ValidatorTests(unittest.TestCase):
         self.role.unlink()
         self.assertEqual(self.run_check()[0], 1)
 
-    def test_managed_tier_drift_is_reported(self):
-        self.role.write_text(self.original.replace('service_tier = "default"', 'service_tier = "fast"'))
+    def test_role_tier_is_rejected(self):
+        self.role.write_text(self.original + 'service_tier = "fast"\n')
         self.assertEqual(self.run_check()[0], 1)
 
 

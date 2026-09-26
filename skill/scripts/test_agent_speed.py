@@ -1,148 +1,170 @@
 #!/usr/bin/env python3
-"""Focused tests for the agent-speed controller."""
-
+"""Global tier edits preserve all role settings and unrelated global configuration."""
 from __future__ import annotations
 
-import os
+import argparse
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
-import argparse
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-import agent_policy
+sys.path.insert(0, str(SCRIPT_DIR))
 import agent_speed
 from test_agent_policy import make_test_home
 
 
-SCRIPT = Path(__file__).with_name("agent_speed.py")
-
-
 class AgentSpeedTests(unittest.TestCase):
-    def make_home(self, directory: str) -> Path:
-        return make_test_home(directory)
-
-    def run_controller(self, home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_controller(self, home, *arguments):
         return subprocess.run(
-            ["python3", str(SCRIPT), "--codex-home", str(home), *arguments],
-            text=True,
-            capture_output=True,
-            check=False,
-            env={**os.environ, "CODEX_HOME": str(home)},
+            [sys.executable, '-B', str(SCRIPT_DIR / 'agent_speed.py'),
+             '--codex-home', str(home), *arguments],
+            text=True, capture_output=True, check=False,
         )
 
-    def test_status_checks_current_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
-            status = self.run_controller(home, "status")
-            self.assertEqual(status.returncode, 0, status.stderr)
-            self.assertIn("luna: standard", status.stdout)
+    def snapshot(self, home):
+        return {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()}
 
-    def test_fast_uses_native_default_but_respects_explicit_disable(self):
+    def test_switch_changes_only_global_tier_and_preserves_comments_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
+            home = make_test_home(directory)
             config = home / 'config.toml'
-            config.write_text('[agents]\nenabled = true\n')
-            self.assertEqual(self.run_controller(home, 'set', 'luna', 'fast', '--dry-run').returncode, 0)
+            config.write_text(config.read_text().replace('service_tier = "default"',
+                              "service_tier = 'default' # selected default"))
+            config.chmod(0o600)
+            before = self.snapshot(home)
+            original = tomllib.loads(config.read_text())
+            result = self.run_controller(home, 'set', 'fast')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(tomllib.loads(config.read_text()), {**original, 'service_tier': 'fast'})
+            self.assertIn('# selected default', config.read_text())
+            self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+            self.assertEqual({k:v for k,v in self.snapshot(home).items() if k != Path('config.toml')},
+                             {k:v for k,v in before.items() if k != Path('config.toml')})
+            self.assertIn('No live task settings changed', result.stdout)
+            self.assertEqual(self.run_controller(home, 'set', 'standard').returncode, 0)
+            self.assertEqual(tomllib.loads(config.read_text()), original)
+
+    def test_dry_run_noop_and_old_model_scoped_command_do_not_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = make_test_home(directory)
+            before = self.snapshot(home)
+            config = home / 'config.toml';mtime = config.stat().st_mtime_ns
+            self.assertEqual(self.run_controller(home, 'set', 'fast', '--dry-run').returncode, 0)
+            self.assertEqual(self.run_controller(home, 'set', 'standard').returncode, 0)
+            self.assertNotEqual(self.run_controller(home, 'set', 'luna', 'fast').returncode, 0)
+            self.assertEqual(self.snapshot(home), before)
+            self.assertEqual(config.stat().st_mtime_ns, mtime)
+
+    def test_feature_switch_is_not_tier_selection_and_explicit_disable_blocks_fast(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = make_test_home(directory);config = home / 'config.toml'
+            result = self.run_controller(home, 'status')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('Global default: standard', result.stdout)
             config.write_text('[features]\nfast_mode = false\n')
-            result = self.run_controller(home, 'set', 'luna', 'fast', '--dry-run')
+            before = config.read_bytes()
+            result = self.run_controller(home, 'set', 'fast')
             self.assertEqual(result.returncode, 1)
             self.assertIn('explicitly disables', result.stderr)
+            self.assertEqual(config.read_bytes(), before)
+            self.assertEqual(self.run_controller(home, 'set', 'standard').returncode, 0)
 
-    def test_dry_run_does_not_change_policy_or_profiles(self) -> None:
+    def test_missing_key_and_file_and_native_priority_alias(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
-            policy_path = home / agent_policy.POLICY_FILENAME
-            before = policy_path.read_bytes()
-            profile_paths = sorted((home / "agents").glob("*.toml"))
-            profiles_before = {
-                path: path.read_bytes() for path in profile_paths
-            }
-            result = self.run_controller(home, "set", "luna", "fast", "--dry-run")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(policy_path.read_bytes(), before)
-            self.assertEqual(
-                {path: path.read_bytes() for path in profile_paths}, profiles_before
-            )
+            home = Path(directory);config = home / 'config.toml'
+            self.assertIn('unset', self.run_controller(home, 'status').stdout)
+            self.assertFalse(config.exists())
+            self.assertEqual(self.run_controller(home, 'set', 'fast').returncode, 0)
+            self.assertEqual(tomllib.loads(config.read_text()), {'service_tier': 'fast'})
+            config.write_text('service_tier = "priority"\n')
+            before = config.read_bytes()
+            self.assertIn('Global default: fast', self.run_controller(home, 'status').stdout)
+            self.assertEqual(self.run_controller(home, 'set', 'fast').returncode, 0)
+            self.assertEqual(config.read_bytes(), before)
+            config.write_text('[features]\nfast_mode = true\n')
+            self.assertEqual(self.run_controller(home, 'set', 'fast').returncode, 0)
+            self.assertEqual(tomllib.loads(config.read_text()),
+                             {'service_tier': 'fast', 'features': {'fast_mode': True}})
 
-    def test_switch_updates_policy_and_only_matching_profiles(self) -> None:
+    def test_only_top_level_assignment_is_changed_with_lookalikes_and_multiline_values(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
-            sol_path = home / "agents" / "sol-xhigh.toml"
-            sol_before = sol_path.read_bytes()
-            result = self.run_controller(home, "set", "luna", "fast")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            policy = agent_policy.load_policy(home)
-            self.assertEqual(
-                policy["models"]["gpt-5.6-luna"]["service_tier"], "fast"
-            )
-            for role, profile_settings in agent_policy.load_profiles(policy, home).items():
-                profile = (home / "agents" / policy["roles"][role]["filename"]).read_text(
-                    encoding="utf-8"
-                )
-                if profile_settings["model"] == "gpt-5.6-luna":
-                    self.assertIn('service_tier = "fast"', profile, role)
-            self.assertEqual(sol_path.read_bytes(), sol_before)
-
-    def test_switch_preserves_toml_comments_and_repairs_selected_tier_drift(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
-            policy_path = home / 'agent-team-policy.toml'
-            policy_path.write_text('# local policy note\n' + policy_path.read_text())
-            policy_before = policy_path.read_bytes()
-            unchanged_role = home / 'agents/default.toml'
-            unchanged_mtime = unchanged_role.stat().st_mtime_ns
-            path = home / 'agents/worker.toml'
-            path.write_text(path.read_text().replace('service_tier = "default"',
-                                                     "service_tier = 'fast' # keep this comment"))
-            result = self.run_controller(home, 'set', 'luna', 'standard')
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('service_tier = "default" # keep this comment', path.read_text())
-            self.assertEqual(policy_path.read_bytes(), policy_before)
-            self.assertEqual(unchanged_role.stat().st_mtime_ns, unchanged_mtime)
-
-    def test_multiline_string_tier_can_be_left_unchanged_or_switched(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
+            home = Path(directory);path = home / 'config.toml'
             for value in ('"""default"""', "'''default'''", '"""\ndefault"""'):
-                with self.subTest(value=value):
-                    path = home / 'agents/worker.toml'
-                    original = path.read_text()
-                    path.write_text(original.replace('service_tier = "default"', 'service_tier = ' + value))
-                    before = path.read_bytes()
-                    result = self.run_controller(home, 'set', 'luna', 'standard')
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(path.read_bytes(), before)
-                    result = self.run_controller(home, 'set', 'luna', 'fast')
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(self.run_controller(home, 'set', 'luna', 'standard').returncode, 0)
+                content = ('developer_instructions = """\nservice_tier = \'default\'\n"""\n'
+                           + f"'service_tier' = {value}\n"
+                           + '[profiles.example]\nservice_tier = "default"\n')
+                path.write_text(content)
+                original = tomllib.loads(content)
+                result = self.run_controller(home, 'set', 'fast')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(tomllib.loads(path.read_text()), {**original, 'service_tier': 'fast'})
 
-    def test_failed_switch_restores_original_files(self):
+    def test_malformed_global_config_does_not_get_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = self.make_home(directory)
-            before = {p: p.read_bytes() for p in home.rglob('*') if p.is_file()}
-            original_write = agent_speed.atomic_write
-            failed = False
+            home = Path(directory);path = home / 'config.toml';path.write_text('broken = [')
+            self.assertEqual(self.run_controller(home, 'set', 'fast').returncode, 1)
+            self.assertEqual(path.read_text(), 'broken = [')
 
-            def fail_once(path, content, mode=None):
-                nonlocal failed
-                if path.name == 'worker.toml' and not failed:
-                    failed = True
-                    raise OSError('simulated write failure')
-                return original_write(path, content, mode)
+    def test_failed_verification_restores_existing_file_or_removes_new_file(self):
+        for existed in (False, True):
+            with self.subTest(existed=existed), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory);path = home / 'config.toml'
+                if existed: path.write_text('service_tier = "default"\n')
+                before = self.snapshot(home)
+                real_read = agent_speed.read_global_config
+                reads = 0
+                def read_or_fail(home):
+                    nonlocal reads
+                    reads += 1
+                    if reads == 2: raise OSError('simulated verification failure')
+                    return real_read(home)
+                args = argparse.Namespace(codex_home=home, tier='fast', dry_run=False)
+                with mock.patch.object(agent_speed, 'read_global_config', side_effect=read_or_fail):
+                    with self.assertRaises(OSError): agent_speed.command_set(args)
+                self.assertEqual(self.snapshot(home), before)
 
-            args = argparse.Namespace(codex_home=home, model='luna', tier='fast', dry_run=False)
-            with mock.patch.object(agent_speed, 'atomic_write', side_effect=fail_once):
-                with self.assertRaises(OSError): agent_speed.command_set(args)
-            self.assertTrue(failed)
-            self.assertEqual(before, {p: p.read_bytes() for p in home.rglob('*') if p.is_file()})
+    def test_model_switch_rejects_role_tier_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = make_test_home(directory)
+            role = home / 'agents/worker.toml'
+            role.write_text(role.read_text() + 'service_tier = "fast"\n')
+            before = self.snapshot(home)
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT_DIR / 'agent_model.py'),
+                                     '--codex-home', str(home), 'set', '6', '--yes'],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('remove role service_tier', result.stderr)
+            self.assertEqual(self.snapshot(home), before)
+
+    def test_invalid_tier_type_reports_error_without_traceback_or_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory);path = home / 'config.toml'
+            path.write_text('service_tier = []\n')
+            for args in [('status',), ('set', 'fast')]:
+                result = self.run_controller(home, *args)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn('Traceback', result.stderr)
+                self.assertEqual(path.read_text(), 'service_tier = []\n')
+
+    def test_model_switch_preserves_global_tier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = make_test_home(directory)
+            self.assertEqual(self.run_controller(home, 'set', 'fast').returncode, 0)
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT_DIR / 'agent_model.py'),
+                                     '--codex-home', str(home), 'set', '6', '--yes'],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = tomllib.loads((home / 'config.toml').read_text())
+            self.assertEqual(config['service_tier'], 'fast')
+            self.assertEqual(config['agents']['default_subagent_model'], 'gpt-6-luna')
+            for path in (home / 'agents').glob('*.toml'):
+                self.assertNotIn('service_tier', tomllib.loads(path.read_text()))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

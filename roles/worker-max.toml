@@ -5,7 +5,6 @@ Select only when the user explicitly requests worker_max or Luna/max for this de
 Do not select it autonomously based on task difficulty.
 """
 model = "gpt-5.6-luna"
-service_tier = "default"
 sandbox_mode = "workspace-write"
 
 model_reasoning_effort = "max"

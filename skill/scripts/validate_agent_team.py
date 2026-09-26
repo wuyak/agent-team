@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read installed role files and check required fields and current managed tiers."""
+"""Check managed roles and the saved global service-tier configuration."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,7 @@ import sys
 
 sys.dont_write_bytecode = True
 from agent_policy import default_codex_home, load_policy, load_profiles
-from agent_speed import validate_managed_configuration
+from agent_speed import read_global_config, validate_global_config
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -23,7 +23,8 @@ def validate_profiles(home: Path) -> int:
         for field in ("description", "developer_instructions"):
             value = profile.get(field)
             require(isinstance(value, str) and bool(value.strip()), f"{path}: empty {field}")
-    validate_managed_configuration(home, policy)
+    _, _, config = read_global_config(home)
+    validate_global_config(config)
     return len(profiles)
 
 
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
-    print(f"PASS: {count} managed role profiles and current service tiers checked.")
+    print(f"PASS: {count} managed role profiles and global service-tier configuration checked.")
     print("Scope: static configuration only; model access, effective permissions, "
           "and delegation behavior require runtime evidence.")
     return 0

@@ -12,7 +12,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 | --- | --- |
 | [skill/](skill/) | 方法、参考与脚本 → `<codex-home>/skills/agent-team/` |
 | [roles/](roles/) | 7 个角色 → `<codex-home>/agents/` |
-| [agent-team-policy.toml](agent-team-policy.toml) | 版本、模型别名、当前目标服务档位与角色文件名映射 → `<codex-home>/agent-team-policy.toml` |
+| [agent-team-policy.toml](agent-team-policy.toml) | 版本、模型别名与角色文件名映射 → `<codex-home>/agent-team-policy.toml` |
 | [config.fragment.toml](config.fragment.toml) | 合并到 `<codex-home>/config.toml` 的 `[agents]` |
 
 由接收方 Codex 检查原生子代理能力、角色发现方式与可用模型，比较已有内容后安装和合并。已有 `[agents]` 时合并键，保留其他配置。安装后可用 `$agent-team` 调用，也可按需加入自己的 `AGENTS.md`。新会话中确认角色识别，并在真实委派时核对所用模型、权限与结果。
@@ -33,7 +33,7 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 | `monitor` | 持续观察已运行目标 | Luna / medium |
 | `sol_xhigh` | 处理语义冲突、竞争解释等难题 | Sol / xhigh |
 
-角色 TOML 是实际 `model`、`model_reasoning_effort` 和 `sandbox_mode` 的来源；策略只保存模型别名、当前目标服务档位和 `roles.<role>.filename` 映射。完整模型名、角色压缩阈值和权限设置以 TOML 为准；Luna 的扩展上下文还需要下节的根级模型目录配置，需当前客户端和账号支持。角色中的 `sandbox_mode` 表达权限意图，实际隔离由父任务与运行时决定。
+角色 TOML 是实际 `model`、`model_reasoning_effort` 和 `sandbox_mode` 的来源；策略 `version = 2` 只保存 `models` 的模型别名和 `roles.<role>.filename` 映射，不保存 `service_tier`。主任务选择的服务档位共享给整棵委派树，角色 TOML 不再配置 `service_tier`。完整模型名、角色压缩阈值和权限设置以 TOML 为准；Luna 的扩展上下文还需要下节的根级模型目录配置，需当前客户端和账号支持。角色中的 `sandbox_mode` 表达权限意图，实际隔离由父任务与运行时决定。
 
 角色改名或合并时，更新 `roles` 中的文件名映射和对应的 `roles/` 文件，并在新会话中确认角色识别。
 
@@ -42,8 +42,8 @@ Agent Team 帮主代理安排分工与依赖、选择角色、交接上下文，
 更换模型或档位时同步核对：
 
 - 角色 TOML 的 `name`、`model`、`model_reasoning_effort`、`sandbox_mode`，以及策略 `roles.<role>.filename` 指向的文件名。
-- 策略 `models` 的模型、别名和当前目标服务档位，以及全局默认子代理配置。
-- 普通服务档位在策略中为 `standard`，角色文件中为 `default`；Fast 需账号和客户端支持，并核对相关 feature。
+- 策略 `version = 2` 的 `models.<model>.alias` 和 `roles.<role>.filename`，以及全局默认子代理配置。
+- 全局服务档位只检查 `<codex-home>/config.toml` 根级 `service_tier`；命令行使用 `standard`，写入配置时保存为 `default`。
 
 ## 切换子代理模型版本
 
@@ -68,7 +68,20 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" s
 - 策略管理的角色 TOML 中的 `model`。
 - `<codex-home>/agent-team-policy.toml` 中 Luna、Sol 两个模型表名。
 
-主代理模型、推理强度、服务档位、权限、上下文和压缩设置不会随切换改变。发现已知版本混用时，脚本会显示警告和具体差异，用户确认后仍可统一切换。每个文件使用原子替换；中途失败时，脚本用写入前读到的内容回滚，不生成持久备份文件。已有会话不会因此改用新模型，请在新的任务中确认实际子代理模型。
+主代理模型、推理强度、全局服务档位、权限、上下文和压缩设置不会随切换改变；`agent_model.py` 不会修改全局 `service_tier`。发现已知版本混用时，脚本会显示警告和具体差异，用户确认后仍可统一切换。每个文件使用原子替换；中途失败时，脚本用写入前读到的内容回滚，不生成持久备份文件。已有会话不会因此改用新模型，请在新的任务中确认实际子代理模型。
+
+## 服务档位
+
+在已验证的 Codex `0.155.0-alpha.9.2` 中，主任务的服务档位共享给整棵委派树，并覆盖角色级档位。`agent_speed.py` 只读取和修改 `<codex-home>/config.toml` 根级 `service_tier`；`agent-team-policy.toml` 和所有角色 TOML 都不再保存服务档位。
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" status
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" set fast --dry-run
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" set fast
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" set standard
+```
+
+命令的 `standard` 会把根级 `service_tier` 写成 `"default"`，`fast` 写成 `"fast"`；`--dry-run` 只显示计划，不写文件。这个全局配置只为后续任务提供默认值，不保证覆盖已有任务或客户端单独选择。已有任务要切换档位，应使用该主任务的原生档位选择；整棵共享设置不能只作用于 Luna，也不能据此声称所有请求都已使用 Fast。`features.fast_mode` 只是功能入口，不等于实际使用 Fast；Fast 仍需账号和客户端支持。`status` 和配置验证只检查静态文件，不证明运行中的任务已经采用该档位。
 
 ## Luna 的上下文与自动压缩
 
@@ -138,7 +151,7 @@ multi_agent_v2 = { enabled = true, min_wait_timeout_ms = 300000, default_wait_ti
 | --- | --- |
 | `agent_policy.py` | 读写策略 |
 | `agent_model.py` | 查看、切换受管子代理的模型版本 |
-| `agent_speed.py` | 查看、调整服务档位 |
+| `agent_speed.py` | 查看、调整全局默认服务档位 |
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_model.py" status
@@ -146,12 +159,13 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/agent_speed.py" s
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/agent-team/scripts/validate_agent_team.py"
 ```
 
-`agent_model.py status` 显示当前模型版本及各个受管字段；`agent_speed.py status` 显示模型服务档位及角色档位是否匹配；`validate_agent_team.py` 检查角色文件、当前策略和服务档位。账号权限和运行时隔离仍需实际运行验证。
+`agent_model.py status` 显示当前模型版本及各个受管字段；`agent_speed.py status` 读取根级 `config.toml` 的全局默认档位，并说明它只影响后续任务；`validate_agent_team.py` 检查角色文件、策略 `version = 2`、模型别名、角色文件名映射和全局配置。账号权限、客户端支持、已有任务的档位和运行时隔离仍需实际运行验证。
 
 | 现象 | 检查方向 |
 | --- | --- |
 | 找不到角色 | Codex home、角色发现规则、文件格式与原生子代理能力 |
 | 模型不可用 | 账号权限、模型名与推理强度；同步角色和策略 |
-| 角色配置不一致 | 角色 TOML、策略中的文件名映射，以及模型对应的目标档位 |
+| 角色配置不一致 | 角色 TOML 不应含 `service_tier`；检查策略 `version = 2`、模型别名和角色文件名映射，以及全局配置根级 `service_tier` |
+| 档位与任务行为不符 | 检查全局默认是否只影响后续任务、已有主任务是否有原生档位选择，以及客户端和账号是否支持 Fast |
 
 更新时比较仓库与本机修改，保留用户的其他配置。
