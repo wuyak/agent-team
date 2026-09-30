@@ -8,7 +8,7 @@ Begin with the available generic roles. Create a named specialist only when
 all of these are true:
 
 1. **Recurring job:** the lane appears across multiple tasks or project phases.
-2. **Distinct capability:** it needs a particular Skill, MCP server, command set, data source, sandbox, or project knowledge.
+2. **Distinct capability:** it needs particular instructions, a Skill, a command set, a data source, or project knowledge.
 3. **Bounded authority:** its read/write scope and escalation boundary can be stated clearly.
 4. **Measurable artifact:** it returns evidence, a patch, a report, a verified state change, or another inspectable result.
 5. **Evaluation evidence:** representative tasks can distinguish it from the generic role it would replace.
@@ -21,7 +21,8 @@ If only the tone, title, or claimed expertise differs, keep the generic agent an
 | --- | --- |
 | Reusable workflow and domain instructions | Skill |
 | Live external capability or authenticated data | MCP server or app connector |
-| Model, reasoning effort, sandbox, and agent instructions | Agent TOML |
+| Agent instructions, and optionally a fixed model or reasoning effort | Agent TOML |
+| Permissions, MCP servers, and service tier | Parent session; roles cannot change them |
 | Project-specific specialist registration | Project `.codex/agents/` and `.codex/config.toml` |
 | Cross-project primitive roles | User `~/.codex/agents/` |
 | Hard policy and deterministic validation | Sandbox, hooks, scripts, tests, or CI |
@@ -33,7 +34,7 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 1. Collect several real tasks from the recurring lane.
 2. Write its capability manifest: inputs, tools, authority, output, done criteria, and escalation boundary.
 3. Start with the cheapest model that passes those tasks. Do not infer model class from the prestige of the job title.
-4. Configure a project-scoped agent with concrete instructions and least necessary sandbox access.
+4. Configure a project-scoped agent with concrete instructions.
 5. Run smoke cases and compare it with the generic `explorer` or `default` on correctness, intervention rate, latency, and cost.
 6. Keep specialists close to the projects whose capabilities they use. Retain them only while they show a stable advantage; otherwise retire them and improve the calling Skill or task context.
 
@@ -41,9 +42,9 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 
 - **Repository maintainer:** explorer maps ownership; project maintainer agent applies repository-specific invariants; main agent integrates.
 - **Release team:** release-evidence agent assembles changelog and test evidence; release operator performs bounded actions; main agent authorizes remote writes.
-- **Incident team:** telemetry specialist gathers live evidence; a `default` agent reproduces and
-  isolates the fault; `sol_xhigh` is used for evidenced competing causal models or semantic conflicts.
-- **Migration team:** source and target specialists validate their own systems; a `default` agent implements the transformer within scope; main agent owns cutover decisions.
+- **Incident team:** telemetry specialist gathers live evidence; a `worker` reproduces and isolates
+  the fault, at `xhigh` when evidence shows competing causal models or semantic conflicts.
+- **Migration team:** source and target specialists validate their own systems; a `worker` implements the transformer within scope; main agent owns cutover decisions.
 
 Add a reviewer or verifier only when it has an independent acceptance surface. Give it a compact
 evidence capsule and disputed claims; a second agent rereading the same full context with the same

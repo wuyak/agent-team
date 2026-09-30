@@ -1,205 +1,97 @@
 ---
 name: agent-team
 description: >-
-  Coordinate native Codex subagents when the user requests delegation or when
-  retrieval, execution, observation, or independent review can be usefully
-  handed off. Arrange outcomes and dependencies, select roles, prepare handoffs,
-  and integrate results. Using this Skill does not require creating a child.
+  Delegate work to native Codex subagents. Use when the user asks for
+  subagents, or when retrieval, execution, observation, or independent review
+  can be handed off. Covers what to delegate, role and effort choice,
+  assignments, waiting, and integrating results; spawning a child is optional.
 ---
 
 # Agent Team
 
-Organize work so each owner can make useful progress and the results combine
-into the requested outcome. Own the division of work, handoffs, coordination,
-and integration. The calling workflow retains task-level decisions and
-engineering methods.
+The parent owns the division of work, handoffs, and integration. The calling
+workflow keeps task-level decisions and engineering methods.
 
-## Choose the working arrangement
+## Decide what to delegate
 
-Look for an assessable result a child can own with sufficient context and
-authority. Delegation can reduce the parent's execution and context burden
-even without parallel work; it is an available choice, not a required step.
+Delegate an outcome a child can own and verify with the context and authority
+the assignment gives it. Delegation is optional, and it can pay off without
+parallel work by keeping execution out of the parent's context. Keep work that
+is simpler to do directly, or that needs continuous judgment grounded in the
+conversation; in troubleshooting, the parent owns the overall diagnosis.
 
-Handle work directly when that is clearly simpler or when progress requires
-continuous judgment grounded in the main conversation. For troubleshooting,
-the parent owns the overall diagnosis and integration. Delegate bounded evidence
-gathering, diagnosis, reproduction, repair, or validation when the child has
-sufficient context and authority.
+Run independent outcomes in parallel and batch small changes of the same kind.
+Give each document, and each module that needs one consistent judgment, a
+single author: the parent or one execution child, who writes the body and
+applies every revision. Other children contribute material, findings, and
+evidence.
 
-Parallelize independent outcomes and batch small changes of the same kind.
-For dependent work, identify the upstream result the consumer needs. Keep
-decisions that require continuous joint reasoning with one owner until a
-usable boundary emerges. Separate file ownership alone does not establish
-that work can proceed independently. Prioritize work that releases a blocked
-consumer or resolves uncertainty that could invalidate later work.
+When agents share an unsettled interface or input, a consumer needs an
+intermediate result, or an upstream change may invalidate other work, read
+[dependent-work.md](references/dependent-work.md).
 
-Read [dependent-work.md](references/dependent-work.md) when agents share an
-unsettled interface or input, a consumer needs an intermediate result, or an
-upstream change may invalidate ongoing or completed downstream work. Ordinary
-independent assignments use the main workflow directly.
+## Choose the role and effort
 
-## Select the role
+Choose a role from those the spawn tool lists, by its description. A role may
+fix its model or reasoning effort; Codex applies a fixed value regardless of
+the spawn request and marks it as unchangeable. Pass a model only when the
+user specifies one for this delegation.
 
-Use the current runtime's role descriptions and capabilities. The important
-selection boundaries are:
+A role description may end with a line such as
+``Effort: `high`; `xhigh` when hard.`` For such a role, pass one of the two
+efforts at spawn. A child keeps its effort for its whole life, including
+follow-up tasks:
 
-- `default` owns bounded execution.
-- `worker` owns execution that warrants additional reasoning effort. Choose
-  it directly without requiring a failed `default` attempt.
-- `worker_max` has the same execution responsibilities as `worker`. Select it
-  only when the user explicitly requests `worker_max` or Luna/max for this
-  delegation. Do not select it autonomously based on task difficulty.
-- `explorer` gathers evidence; `reviewer` independently examines a defined
-  claim or artifact. Diagnosis, reproduction, and repair need execution roles.
-- `sol_xhigh` fits evidenced semantic conflicts, competing causal explanations,
-  or difficult cross-module interpretation.
-- `monitor` observes an existing command, process, or task. A single wait needs
-  no child; observe other children through native collaboration tools.
+- The first for ordinary work in the role, including long or important work.
+- The second when the work turns on hard reasoning: reconciling conflicting
+  evidence, choosing among competing explanations or designs, or following
+  behavior across modules.
 
-Missing information, unsuitable scope, role mismatch, and reasoning
-difficulty call for different responses. Diagnose the limitation before
-supplementing, reshaping, reassigning, or upgrading the work. Do not force
-a role ladder or escalate merely because work is lengthy or important.
-Once difficult reasoning is resolved, assign the remaining work to the
-role it now needs.
+When a child's return shows it was stuck on reasoning rather than on missing
+information or scope, assign the hard part to a new child at the second
+effort, and put the first child's findings in its assignment. For a role with
+neither a fixed effort nor an effort line, omit effort so the configured
+default applies. The user's explicit effort for this delegation takes
+precedence.
 
-## Assign an outcome
+## Write the assignment
 
-Give the child an outcome it can own through the required checks: its purpose,
-scope, available evidence, permitted operations, decisions it may make, and
-acceptance evidence. Distinguish its validation from the parent's integration
-checks. For a pending dependency, identify its owner, the result needed, and
-how availability or a change will be communicated. Separate work that can
-proceed now from work that needs that result.
+Spawn with `fork_turns="none"` and a self-contained assignment. Inherit recent
+turns only when necessary context cannot be restated, and full history only
+when a smaller selection is insufficient. State:
 
-Request an interim handoff when another owner needs it to proceed. Otherwise
-let the child carry its assignment to final delivery. If the user requests
-progress in the parent task, specify useful reporting points.
+- the outcome and why it is needed;
+- scope, available evidence, and permitted operations, including the files the
+  child owns when others work nearby;
+- decisions the child may make, and choices it must return to the parent;
+- the evidence that will show the outcome is done;
+- for a pending dependency, who delivers it and how the child will hear.
 
-A clear assignment does not require a known solution. Technical unknowns
-may be part of the work; unresolved user choices or missing authorization
-block only the actions that depend on them. Tools and resources needed for
-execution must be accessible to the child; parent-visible tools do not
-establish child capabilities. Resolve or report missing access. An interface
-being implemented by another owner is a work dependency, not tool access.
+The child needs its own access to the tools the work requires; resolve or
+report a gap before spawning. Send related follow-ups to the same child so its
+context carries over.
 
-Explicitly set `fork_turns` when spawning. Default to `fork_turns="none"`
-with a self-contained task description, and supplement missing information
-as needed. Inherit recent turns only when necessary original context cannot
-be reliably restated. Use full history only when a smaller selection is
-insufficient, and explain why.
+## Wait and communicate
 
-Keep delegation one level deep and explicitly prohibit further delegation
-in each child assignment. Reuse the child for related follow-ups so useful
-task context survives.
+When the next step needs a specific child's result, or nothing independent
+remains, wait with the native wait tool (`wait_agent`) at its default timeout,
+and keep waiting after a timeout with no new development. Send a message only
+to supply information or request action that a current decision or handoff
+needs; judge progress by the child's work and delivery. On a capacity
+rejection, wait for, reuse, or combine existing children before retrying.
 
-## Coordinate around events
+Tell the user about changes to the overall outcome, not each child's activity.
 
-Use events to choose the next action:
+## Integrate and close
 
-| Event | Parent action |
-| --- | --- |
-| Routine progress; the arrangement still holds | Continue independent work or wait. No acknowledgment is needed. |
-| An upstream result is usable | Hand it to the owner whose next action depends on it. |
-| A blocker or consequential question | Supply the missing input, arrange the needed decision, or retask the affected work. |
-| Changed scope, evidence, authority, or dependency | Reassess affected work; stop or retask its owner before replacement. Verify a requested interruption before treating work as stopped; preserve unaffected work. |
-| Final delivery | Assess the result and integrate what its evidence supports. |
-| Capacity rejection | Wait, reuse, combine, defer, or reclaim work. Retry when relevant capacity or request conditions change. |
-| Terminal state without a usable delivery | Identify the missing result or failure evidence before asking for completion or retrying. |
+Accept a result against its assigned outcome and the conditions its checks
+actually covered, then run the integration checks that span assignments. When
+a child ends without a usable result, find what is missing before retrying.
+Before closing the task, account for every child as completed, errored,
+interrupted, or reclaimed.
 
-Send a message when it supplies information or requests action needed for a
-current decision or handoff. Combine known requests for the same outcome.
-While a request is outstanding, follow up only when changed evidence, a
-missed agreed handoff, or a newly blocked next action warrants intervention.
+## Configuration
 
-Report changes that matter to the overall outcome, rather than replaying each
-child's activity or presenting unchanged results as new progress. Keep
-completion claims within the scope established by the evidence; name outstanding
-dependencies, integration, or review that still prevent completion. Describe
-remaining work directly instead of repeatedly predicting completion. When an
-update is due without a material change, briefly state the known waiting
-condition. Do not query a child solely to produce an update.
-
-Use native collaboration tools and the identifiers they accept. Use
-`send_message` for information and `followup_task` when work must start or
-resume. Judge whether instructions were applied from the resulting work,
-substantive reply, or final delivery; a delivery receipt does not require an
-acknowledgment exchange. Use `list_agents` to resolve contradictory state,
-answer an explicit status request, or make a capacity decision.
-
-Use the native child-wait tool (`wait_agent` where available) with its
-configured default timeout in these two cases:
-
-- **Waiting for a specific child:** When the parent needs a particular child's
-  result to continue, identify that child and the required result, then use the
-  native wait tool without repeatedly querying status or sending confirmation
-  messages. Resume the original task when the result is usable.
-- **No parent work:** When no necessary independent work remains, directly use
-  the native wait tool to suspend model execution, without looking for extra
-  work to do. If the wait times out without a new development, continue waiting.
-
-Keep enough working state to know the owners, outstanding handoffs, and next
-actions. Existing task context is sufficient unless its loss would impede
-resumption; children alone do not justify coordination documents.
-
-## Assess and integrate results
-
-Require a self-contained final containing the result, decisive evidence or
-artifacts, checks and outcomes, remaining uncertainty, and needed next action.
-Include accepted changes agreed during execution. Return the final directly
-without sending a duplicate message first.
-
-Assess the result against the assigned outcome and the conditions its checks
-actually covered. Reuse valid evidence and perform the remaining integration
-checks. Repeat or extend validation for a relevant change, failure, or evidence
-gap; a child having performed the original check is not a reason to repeat it.
-
-For conflicting results, first compare the target, version, conditions, and
-acceptance criteria. Preserve conclusions that apply to different cases.
-If a conflict remains, assign the specific unresolved question to the role
-and workflow it needs. Technical diagnosis stays with the engineering
-workflow; consequential user choices return to the calling workflow.
-
-Request independent review for a concrete claim, change, or uncertainty.
-Provide current material, acceptance criteria, decisive sources, and the
-question the review must resolve. Update reviews when their basis changes;
-do not impose a fixed sequence of review agents.
-
-For evidence-heavy returns, target at most 8,000 Unicode characters and
-20 findings or exceptions. If truncated, identify omitted material, its
-location, and the smallest follow-up needed.
-
-Retry after correcting an identified cause, or use a bounded retry to test a
-specific failure hypothesis. When multiple child executions share a failure,
-validate the correction with one child under the same role, authority, and input
-path before resuming the affected group.
-Handle capacity rejection through the scheduling branch above.
-
-Before closing the parent task, account for every child as completed,
-errored, interrupted, or explicitly reclaimed.
-
-## Monitor an existing target
-
-The monitor owns routine status and log checks for its assigned target.
-The parent queries the same target to intervene, resolve missing or
-conflicting evidence, or perform a separate acceptance check.
-
-Assess completion against the named terminal condition or the user's
-explicit end to monitoring. Interim progress and requests for help are
-not final results.
-
-For required updates before completion, the child needs an available parent
-messaging channel; otherwise keep that observation with the parent.
-
-Measure elapsed time rather than counting polls. Read the clock before
-reporting current time; otherwise omit it. Distinguish event timestamps
-from current time.
-
-## Configuration and maintenance
-
-Read these only for the corresponding request:
-
-- [configuration.md](references/configuration.md): installation, role
-  settings, runtime permissions, service tiers, and configuration validation.
-- [professional-agents.md](references/professional-agents.md): creating
-  or evaluating recurring project specialists.
+Read [configuration.md](references/configuration.md) to install Agent Team or
+edit role files, and [professional-agents.md](references/professional-agents.md)
+to create or evaluate a recurring project specialist.
