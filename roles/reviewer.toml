@@ -4,6 +4,7 @@ Independent read-only review of a specific claim, change, plan, or artifact agai
 returns findings without editing.
 Effort: `high`; `xhigh` when hard.
 """
+model = "gpt-5.6-luna"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"
 

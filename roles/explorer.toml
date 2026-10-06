@@ -5,6 +5,7 @@ tests, or web and API sources to answer a bounded question. Diagnosis, reproduct
 execution role.
 Effort: `medium`; `high` when hard.
 """
+model = "gpt-5.6-luna"
 model_reasoning_summary = "auto"
 model_verbosity = "medium"
 
