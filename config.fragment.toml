@@ -1,8 +1,8 @@
 # Only the current Agent Team settings; merge into the recipient configuration.
-# Roles that leave model or effort open use these defaults unless the spawn request sets them.
+# `high` is a fail-safe; configurable roles should still pass the selected effort.
 [agents]
 enabled = true
 max_concurrent_threads_per_session = 5
 default_subagent_model = "gpt-5.6-sol"
-default_subagent_reasoning_effort = "medium"
+default_subagent_reasoning_effort = "high"
 interrupt_message = true

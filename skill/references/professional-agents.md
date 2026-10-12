@@ -1,11 +1,12 @@
 # Professional Agents
 
-A professional agent is a durable operating unit, not a character description. It combines a recurring job with the capabilities, authority, context contract, and evaluation needed to perform that job reliably.
+A professional agent is a durable operating unit: a recurring job plus the
+capabilities, authority, context contract, and evaluation needed to perform it
+reliably. It is not a character description.
 
 ## Promotion Test
 
-Begin with the available generic roles. Create a named specialist only when
-all of these are true:
+Begin with generic roles. Create a named specialist only when all are true:
 
 1. **Recurring job:** the lane appears across multiple tasks or project phases.
 2. **Distinct capability:** it needs particular instructions, a Skill, a command set, a data source, or project knowledge.
@@ -27,7 +28,9 @@ If only the tone, title, or claimed expertise differs, keep the generic agent an
 | Cross-project primitive roles | User `~/.codex/agents/` |
 | Hard policy and deterministic validation | Sandbox, hooks, scripts, tests, or CI |
 
-An agent may invoke a Skill, but the two are not interchangeable: the Skill explains how to perform a workflow; the agent is an independently scheduled execution context with a model, permissions, tools, and lifecycle.
+A Skill defines a reusable workflow; an agent is an independently scheduled
+context with a model, permissions, tools, and lifecycle. An agent may invoke a
+Skill, but the two are not interchangeable.
 
 ## Build Sequence
 
@@ -35,8 +38,8 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
 2. Write its capability manifest: inputs, tools, authority, output, done criteria, and escalation boundary.
 3. Start with the cheapest model that passes those tasks. Do not infer model class from the prestige of the job title.
 4. Configure a project-scoped agent with concrete instructions.
-5. Run smoke cases and compare it with the generic `explorer` or `default` on correctness, intervention rate, latency, and cost.
-6. Keep specialists close to the projects whose capabilities they use. Retain them only while they show a stable advantage; otherwise retire them and improve the calling Skill or task context.
+5. Compare smoke cases with `explorer` or `default` on correctness, intervention rate, latency, and cost.
+6. Keep specialists near the projects they serve. Retain only a stable advantage; otherwise retire them and improve the Skill or task context.
 
 ## Useful Team Shapes
 
@@ -46,6 +49,6 @@ An agent may invoke a Skill, but the two are not interchangeable: the Skill expl
   the fault, at `xhigh` when evidence shows competing causal models or semantic conflicts.
 - **Migration team:** source and target specialists validate their own systems; a `worker` implements the transformer within scope; main agent owns cutover decisions.
 
-Add a reviewer or verifier only when it has an independent acceptance surface. Give it a compact
-evidence capsule and disputed claims; a second agent rereading the same full context with the same
-tools is not automatically useful independence.
+Add a reviewer or verifier only for an independent acceptance surface. Give it
+a compact evidence capsule and disputed claims; rereading the same full context
+with the same tools is not automatically independent.

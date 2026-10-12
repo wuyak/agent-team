@@ -31,7 +31,7 @@ role file takes effect through these fields:
 | `name` | Required. The role identity used in spawn requests; the file name does not replace it. |
 | `description` | Required. Shown to the parent in the spawn tool; state when to choose the role. It may end with an effort line, ``Effort: `medium`; `high` when hard.``, naming the ordinary and hard efforts the parent chooses between. |
 | `developer_instructions` | Required. Added to the child's instructions. |
-| `model`, `model_reasoning_effort` | Optional. When set, fixed for the role and applied over any spawn request. When omitted, Codex uses the spawn request, then `[agents].default_subagent_model` and `[agents].default_subagent_reasoning_effort`, then the parent's current setting. |
+| `model`, `model_reasoning_effort` | Optional. When set, fixed for the role. Otherwise a non-inherited spawn uses its request, then the `[agents]` defaults, then the parent's settings. A `fork_turns="all"` spawn instead inherits the parent's model and effort and accepts no overrides. |
 | `model_reasoning_summary`, `model_verbosity`, `personality` | Optional output settings. |
 | `nickname_candidates` | Optional. ASCII letters, digits, spaces, hyphens, and underscores only; an invalid entry makes Codex drop the whole role. |
 

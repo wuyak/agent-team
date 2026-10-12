@@ -9,22 +9,14 @@ description: >-
 
 # Agent Team
 
-The parent owns the division of work, handoffs, and integration. The calling
-workflow keeps task-level decisions and engineering methods.
+The parent owns delegation, handoffs, integration, and task-level decisions.
 
-## Decide what to delegate
+## Delegate work
 
-Delegate an outcome a child can own and verify with the context and authority
-the assignment gives it. Delegation is optional, and it can pay off without
-parallel work by keeping execution out of the parent's context. Keep work that
-is simpler to do directly, or that needs continuous judgment grounded in the
-conversation; in troubleshooting, the parent owns the overall diagnosis.
-
-Run independent outcomes in parallel and batch small changes of the same kind.
-Give each document, and each module that needs one consistent judgment, a
-single author: the parent or one execution child, who writes the body and
-applies every revision. Other children contribute material, findings, and
-evidence.
+Delegate a bounded outcome a child can own and verify. Keep work that is
+simpler to do directly or needs continuous conversation-level judgment; the
+parent owns the overall diagnosis. Run independent outcomes in parallel. Give
+each document or module one author; other children provide evidence or review.
 
 When agents share an unsettled interface or input, a consumer needs an
 intermediate result, or an upstream change may invalidate other work, read
@@ -32,63 +24,52 @@ intermediate result, or an upstream change may invalidate other work, read
 
 ## Choose the role and effort
 
-Choose a role from those the spawn tool lists, by its description. A role may
-fix its model or reasoning effort; Codex applies a fixed value regardless of
-the spawn request and marks it as unchangeable. Pass a model only when the
-user specifies one for this delegation.
+| Role | Use | Ordinary | Hard |
+| --- | --- | --- | --- |
+| `default` | Bounded mixed work | `medium` | `high` |
+| `worker` | Execution or a deliverable | `high` | `xhigh` |
+| `explorer` | Read-only retrieval | `medium` | `high` |
+| `reviewer` | Independent read-only review | `high` | `xhigh` |
+| `monitor` | Repeated observation to a terminal condition | fixed `medium` | — |
 
-A role description may end with a line such as
-``Effort: `high`; `xhigh` when hard.`` For such a role, pass one of the two
-efforts at spawn. A child keeps its effort for its whole life, including
-follow-up tasks:
+For configurable roles, pass the selected effort unless `fork_turns="all"`
+forces inheritance. Hard means conflicting evidence, competing explanations or
+designs, or cross-module reasoning—not merely long or important. A user's
+explicit choice wins where the effort is configurable.
 
-- The first for ordinary work in the role, including long or important work.
-- The second when the work turns on hard reasoning: reconciling conflicting
-  evidence, choosing among competing explanations or designs, or following
-  behavior across modules.
+The distributed `[agents]` default is `high` only as a fail-safe for omissions;
+an omission is not a successful selection. It may over-provision simple work
+and still under-provision hard `worker` or `reviewer` work.
 
-When a child's return shows it was stuck on reasoning rather than on missing
-information or scope, assign the hard part to a new child at the second
-effort, and put the first child's findings in its assignment. For a role with
-neither a fixed effort nor an effort line, omit effort so the configured
-default applies. The user's explicit effort for this delegation takes
-precedence.
+For another role, obey its fixed effort or `Effort` line; otherwise use the
+configured default. Pass a model only when the user selects one. A child's
+effort cannot change; if it is stuck on reasoning, spawn a hard-effort child
+with the unresolved work and prior findings.
 
-## Write the assignment
+## Assign the outcome
 
-Spawn with `fork_turns="none"` and a self-contained assignment. Inherit recent
-turns only when necessary context cannot be restated, and full history only
-when a smaller selection is insufficient. State:
+Default to `fork_turns="none"` with a self-contained assignment:
 
-- the outcome and why it is needed;
-- scope, available evidence, and permitted operations, including the files the
-  child owns when others work nearby;
-- decisions the child may make, and choices it must return to the parent;
-- the evidence that will show the outcome is done;
-- for a pending dependency, who delivers it and how the child will hear.
+- the outcome, purpose, and acceptance evidence;
+- scope, evidence, permitted operations, and file ownership;
+- decisions it may make and choices it must return;
+- dependencies, required handoffs, and their owners.
 
-The child needs its own access to the tools the work requires; resolve or
-report a gap before spawning. Send related follow-ups to the same child so its
-context carries over.
+Use `fork_turns="all"` only when necessary context cannot be restated. Confirm
+tool access; send related follow-ups to the same child.
 
-## Wait and communicate
+## Coordinate
 
-When the next step needs a specific child's result, or nothing independent
-remains, wait with the native wait tool (`wait_agent`) at its default timeout,
-and keep waiting after a timeout with no new development. Send a message only
-to supply information or request action that a current decision or handoff
-needs; judge progress by the child's work and delivery. On a capacity
-rejection, wait for, reuse, or combine existing children before retrying.
+When a result is needed or nothing independent remains, use `wait_agent` and
+keep waiting after an unchanged timeout. Message only when the child needs
+information or action. On a capacity rejection, wait for, reuse, or combine
+existing children. Report outcome changes, not routine child activity.
 
-Tell the user about changes to the overall outcome, not each child's activity.
+## Integrate
 
-## Integrate and close
-
-Accept a result against its assigned outcome and the conditions its checks
-actually covered, then run the integration checks that span assignments. When
-a child ends without a usable result, find what is missing before retrying.
-Before closing the task, account for every child as completed, errored,
-interrupted, or reclaimed.
+Assess results against their assignments and actual checks, then run shared
+checks. Resolve missing evidence before retrying. Before closing, account for
+every child as completed, errored, interrupted, or reclaimed.
 
 ## Configuration
 
